@@ -36,3 +36,7 @@ results/metrics/*
 !results/metrics/.gitkeep
 results/runs/*
 !results/runs/.gitkeep
+
+# --- Python ---
+__pycache__/
+*.py[cod]
