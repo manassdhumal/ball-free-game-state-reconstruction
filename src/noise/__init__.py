@@ -1,5 +1,5 @@
 """
-Noise analysis and synthetic tracking degradation package.
+Noise analysis, synthetic tracking degradation, and mitigation package.
 """
 
 from src.noise.degradation import (
@@ -13,8 +13,15 @@ from src.noise.degradation import (
     apply_track_fragmentation,
     degrade_tracking,
 )
+from src.noise.interpolation import interpolate_trajectory
+from src.noise.smoothing import (
+    smooth_moving_average,
+    smooth_savitzky_golay,
+    smooth_trajectory,
+)
 
 __all__ = [
+    # Degradation API
     "SEVERITY_CONFIGS",
     "ALL_DEGRADATION_NAMES",
     "apply_random_missing",
@@ -24,4 +31,9 @@ __all__ = [
     "apply_track_fragmentation",
     "apply_identity_switch",
     "degrade_tracking",
+    # Mitigation API
+    "interpolate_trajectory",
+    "smooth_moving_average",
+    "smooth_savitzky_golay",
+    "smooth_trajectory",
 ]
