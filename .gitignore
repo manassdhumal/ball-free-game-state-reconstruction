@@ -1,2 +1,38 @@
 .venv/
 soccernet-gamestate/
+
+# --- Data Policy ---
+# Raw datasets are NOT committed. 
+data/raw/*
+!data/raw/.gitkeep
+
+# Intermediate/generated datasets are NOT committed.
+data/interim/*
+!data/interim/.gitkeep
+
+# Processed datasets are NOT committed unless they are explicitly versioned metadata.
+data/processed/*
+!data/processed/.gitkeep
+
+# --- Models Policy ---
+# Model checkpoints are NOT committed.
+models/checkpoints/*
+!models/checkpoints/.gitkeep
+
+# Model artifacts are NOT committed.
+models/artifacts/*
+!models/artifacts/.gitkeep
+
+# --- Results Policy ---
+# Generated experiment results are NOT committed by default.
+results/*
+!results/.gitkeep
+!results/figures/
+!results/metrics/
+!results/runs/
+results/figures/*
+!results/figures/.gitkeep
+results/metrics/*
+!results/metrics/.gitkeep
+results/runs/*
+!results/runs/.gitkeep
