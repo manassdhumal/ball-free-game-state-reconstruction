@@ -77,12 +77,12 @@ def interpolate_trajectory(
         if n_rows == 0:
             continue
 
-        vis = grp["visible"].values
+        vis = grp["visible"].values.copy()
         x_vals = grp["x"].values.copy().astype(float)
         y_vals = grp["y"].values.copy().astype(float)
         conf_vals = grp["confidence"].values.copy().astype(float)
         imputed_flags = grp["imputed"].values.copy().astype(bool)
-        frames = grp["frame"].values
+        frames = grp["frame"].values.copy()
 
         # Identify contiguous missing segments
         i = 0

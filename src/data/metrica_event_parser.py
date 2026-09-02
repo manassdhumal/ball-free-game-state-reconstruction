@@ -153,7 +153,9 @@ def load_metrica_events(filepath: str, match_id: str) -> pd.DataFrame:
             return f"UNKNOWN_{jersey}"
 
     df['from_player_id'] = df.apply(lambda row: to_canonical_player_id(row['From'], row['team']), axis=1)
+    df['from_player_id'] = df['from_player_id'].replace({np.nan: None})
     df['to_player_id'] = df.apply(lambda row: to_canonical_player_id(row['To'], row['team']), axis=1)
+    df['to_player_id'] = df['to_player_id'].replace({np.nan: None})
 
     # 7. Map coordinates (Start X/Y, End X/Y)
     df['start_x'] = df['Start X'].astype(float)
