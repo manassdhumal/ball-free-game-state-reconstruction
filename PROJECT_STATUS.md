@@ -3,7 +3,7 @@
 ## 1. Project Overview & Current State
 - **Project Name:** Ball-Free Game State Reconstruction (GSR)
 - **Current Milestone:** Phase 1/2 - Multi-Source Tracking Ingestion, Synthetic Degradation, & Noise Mitigation Framework
-- **Current Step:** Step 75 - Final Statistical Analysis & Research Findings (completed)
+- **Current Step:** Step 77 - SoccerNet-GSR Access & GPU Execution Environment (investigation complete; execution blocked)
 - **Data Integrity Policy:** Raw tracking and event data in `data/raw/` (including `metrica/` and `skillcorner/`) remains strictly untouched, read-only, and gitignored. All intermediate/synthetic/mitigated outputs are generated into `data/interim/` and figures into `results/figures/`.
 
 ---
@@ -97,6 +97,10 @@
 - **Step 74 (Robustness Expansion):** Executed the expansion grid (4 windows × 5 seeds × 3 severities). A non-destructive provenance audit confirms a complete canonical fileset: 60 unique runspecs and 180 validated condition rows. Legacy nested `robustness_expansion` artifacts were detected and classified as non-canonical duplicates; they have been preserved and not removed. Full test suite passed locally (159 tests, 11 skipped). Final statistical analysis has not been completed — see `docs/robustness_statistical_validation.md` for next steps. 
 
 - **Step 75 — Final Statistical Analysis & Research Findings:** Completed analysis of 60 unique runspecs and 180 condition observations across 4 windows, 5 seeds, 3 severities, and 3 conditions. The final aggregate results support the main possession degradation finding, the tactical robustness finding, and incomplete but meaningful mitigation recovery. Severity, window, and seed analyses were generated and reviewed, with limitations documented in `docs/final_research_findings.md`. No real-world GSR validation was performed; GSR remains BLOCKED / OPTIONAL.
+
+- **Step 76 — SoccerNet-GSR Data Access, GPU Recovery & Perception Readiness Audit:** Audited the checked-out GSR repository at commit `1c958345`, the official example prediction archive, local data directories, model-weight locations, and both Python environments. No SoccerNet-GSR source video, annotations, complete model weights, installed TrackLab runtime, or verifiable local NVIDIA/CUDA environment is available. Objective 1 (real perception adaptation and per-frame GSR output) remains NOT COMPLETE; no GS-HOTA result exists. The exact recovery route, one-sequence baseline command, canonical mapping, storage policy, and GPU recommendation are documented in `docs/gsr_recovery_plan.md` and `docs/gpu_environment.md`. Next actionable step: obtain authorized access to one validation sequence and labels in persistent GPU storage.
+
+- **Step 77 — SoccerNet-GSR Access & GPU Execution Environment:** Rechecked official access guidance, local data/search paths, the GSR checkout, dependency declarations, model locations, and GPU availability. Authorized validation data, labels, source video, complete weights, installed runtime, and a local NVIDIA/CUDA environment remain unavailable; the public access page was not reachable from the audit environment. No sequence ID was invented and no inference or GS-HOTA evaluation was run. Objective 1 remains INCOMPLETE and GSR remains BLOCKED. Access requirements, sequence metadata checklist, storage constraints, pinned GPU setup, checkpoint requirements, one-sequence command, and success criteria are documented in `docs/gsr_access_checklist.md` and `docs/gsr_gpu_execution_plan.md`. Next actionable step: obtain authorized access to one validation sequence and matching labels in persistent GPU storage.
 
 ---
 
