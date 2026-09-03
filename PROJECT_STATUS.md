@@ -3,7 +3,7 @@
 ## 1. Project Overview & Current State
 - **Project Name:** Ball-Free Game State Reconstruction (GSR)
 - **Current Milestone:** Phase 1/2 - Multi-Source Tracking Ingestion, Synthetic Degradation, & Noise Mitigation Framework
-- **Current Step:** Step 72 - Task-Driven Robustness Benchmark Completed & Verified
+- **Current Step:** Step 74 - Robustness Experiment Expansion (results collected, audit recorded)
 - **Data Integrity Policy:** Raw tracking and event data in `data/raw/` (including `metrica/` and `skillcorner/`) remains strictly untouched, read-only, and gitignored. All intermediate/synthetic/mitigated outputs are generated into `data/interim/` and figures into `results/figures/`.
 
 ---
@@ -93,6 +93,8 @@
 - **Step 70:** Implemented ball-free spatial graph and heuristic possession baseline (`src/possession/`). Created `docs/ball_free_possession_baseline.md`, tests, and `01_ball_free_possession_baseline.ipynb`. Validated on first 5 minutes of Metrica Game 1.
 - **Step 71:** Implemented tactical scoring baseline (`src/tactics/`). Created `docs/tactical_scoring_baseline.md`, tests, and `01_tactical_scoring_baseline.ipynb`. Validated features (team geometry, pressure, options) and Tactical Advantage Score (TAS).
 - **Step 72:** Implemented the reproducible task-driven robustness benchmark (src/validation/robustness_benchmark.py) across CLEAN, SYNTHETIC-DEGRADED, and NOISE-MITIGATED conditions. Verified the 60-second Metrica Game 1 subset (frames 1–1500, seed 72), emitted compact result artifacts, and passed 140 tests (11 skipped for absent SkillCorner data).
+
+- **Step 74 (Robustness Expansion):** Executed the expansion grid (4 windows × 5 seeds × 3 severities). A non-destructive provenance audit confirms a complete canonical fileset: 60 unique runspecs and 180 validated condition rows. Legacy nested `robustness_expansion` artifacts were detected and classified as non-canonical duplicates; they have been preserved and not removed. Full test suite passed locally (159 tests, 11 skipped). Final statistical analysis has not been completed — see `docs/robustness_statistical_validation.md` for next steps. 
 
 ---
 
