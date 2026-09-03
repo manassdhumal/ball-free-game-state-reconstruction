@@ -3,7 +3,7 @@
 ## 1. Project Overview & Current State
 - **Project Name:** Ball-Free Game State Reconstruction (GSR)
 - **Current Milestone:** Phase 1/2 - Multi-Source Tracking Ingestion, Synthetic Degradation, & Noise Mitigation Framework
-- **Current Step:** Step 74 - Robustness Experiment Expansion (results collected, audit recorded)
+- **Current Step:** Step 75 - Final Statistical Analysis & Research Findings (completed)
 - **Data Integrity Policy:** Raw tracking and event data in `data/raw/` (including `metrica/` and `skillcorner/`) remains strictly untouched, read-only, and gitignored. All intermediate/synthetic/mitigated outputs are generated into `data/interim/` and figures into `results/figures/`.
 
 ---
@@ -95,6 +95,8 @@
 - **Step 72:** Implemented the reproducible task-driven robustness benchmark (src/validation/robustness_benchmark.py) across CLEAN, SYNTHETIC-DEGRADED, and NOISE-MITIGATED conditions. Verified the 60-second Metrica Game 1 subset (frames 1–1500, seed 72), emitted compact result artifacts, and passed 140 tests (11 skipped for absent SkillCorner data).
 
 - **Step 74 (Robustness Expansion):** Executed the expansion grid (4 windows × 5 seeds × 3 severities). A non-destructive provenance audit confirms a complete canonical fileset: 60 unique runspecs and 180 validated condition rows. Legacy nested `robustness_expansion` artifacts were detected and classified as non-canonical duplicates; they have been preserved and not removed. Full test suite passed locally (159 tests, 11 skipped). Final statistical analysis has not been completed — see `docs/robustness_statistical_validation.md` for next steps. 
+
+- **Step 75 — Final Statistical Analysis & Research Findings:** Completed analysis of 60 unique runspecs and 180 condition observations across 4 windows, 5 seeds, 3 severities, and 3 conditions. The final aggregate results support the main possession degradation finding, the tactical robustness finding, and incomplete but meaningful mitigation recovery. Severity, window, and seed analyses were generated and reviewed, with limitations documented in `docs/final_research_findings.md`. No real-world GSR validation was performed; GSR remains BLOCKED / OPTIONAL.
 
 ---
 
