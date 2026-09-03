@@ -2,7 +2,7 @@
 
 ## 1. Project Overview & Current State
 - **Project Name:** Ball-Free Game State Reconstruction (GSR)
-- **Current Milestone:** Phase 1/2 - Multi-Source Tracking Ingestion, Synthetic Degradation, & Noise Mitigation Framework
+- **Current Milestone:** Phase 6 - Original-Scope Completion: SoccerNet-GSR Perception, Broadcast Validation, Tactical Pass Modeling & Final Robustness Benchmark
 - **Current Step:** Step 77 - SoccerNet-GSR Access & GPU Execution Environment (investigation complete; execution blocked)
 - **Data Integrity Policy:** Raw tracking and event data in `data/raw/` (including `metrica/` and `skillcorner/`) remains strictly untouched, read-only, and gitignored. All intermediate/synthetic/mitigated outputs are generated into `data/interim/` and figures into `results/figures/`.
 
@@ -47,6 +47,26 @@
   - Verified Metrica Game 1 frames 1–1500 with seed 72; summary metrics, configuration, TAS values, and SVG comparison stored under `results/`.
 - **Infrastructure:**
   - `scripts/setup_gsr_colab.sh`: Google Colab automated setup script.
+
+### Current Research State
+
+- **Research foundation:** Phases 0-5 are complete and form the validated downstream research foundation: canonical ingestion, tracking-quality analysis, noise/degradation and mitigation, ball-free possession/event inference, tactical scoring, and the controlled robustness benchmark with final statistical analysis.
+- **Primary remaining research gap:** Genuine broadcast-video perception through SoccerNet-GSR, including real player detections/tracking and GS-HOTA evaluation.
+- **Secondary remaining research gaps:** Independent action-spotting validation, pass-completion probability modeling, counterfactual pass ranking, and a real-broadcast robustness tier.
+- **Current blocker:** Authorized SoccerNet-GSR data and matching labels, complete perception checkpoints/runtime, and an approved GPU execution environment are not currently available.
+
+---
+
+## Current Experimental Result
+
+The current quantitative robustness benchmark is **validated but not the final complete benchmark** for the original project scope.
+
+- **Step 72:** Verified single-window Metrica baseline using one 60-second window and one degradation seed. These results are historical/preliminary context.
+- **Steps 74-75:** Expanded and statistically analyzed the primary controlled Metrica robustness benchmark across 4 windows, 5 seeds, 3 severities, and 3 conditions. The final aggregate contains 60 unique runspecs and 180 condition observations.
+- These results evaluate controlled Metrica conditions: `CLEAN`, `SYNTHETIC-DEGRADED`, and `NOISE-MITIGATED`.
+- They do not constitute genuine SoccerNet-GSR perception evaluation and do not establish the final real-broadcast robustness claim.
+
+The controlled benchmark remains intact as the validated development result. A genuine broadcast/GSR condition, GS-HOTA evaluation, independent event validation, pass modeling, counterfactual ranking, and final end-to-end validation remain outstanding.
 
 ---
 
@@ -96,14 +116,91 @@
 
 - **Step 74 (Robustness Expansion):** Executed the expansion grid (4 windows × 5 seeds × 3 severities). A non-destructive provenance audit confirms a complete canonical fileset: 60 unique runspecs and 180 validated condition rows. Legacy nested `robustness_expansion` artifacts were detected and classified as non-canonical duplicates; they have been preserved and not removed. Full test suite passed locally (159 tests, 11 skipped). Final statistical analysis has not been completed — see `docs/robustness_statistical_validation.md` for next steps. 
 
-- **Step 75 — Final Statistical Analysis & Research Findings:** Completed analysis of 60 unique runspecs and 180 condition observations across 4 windows, 5 seeds, 3 severities, and 3 conditions. The final aggregate results support the main possession degradation finding, the tactical robustness finding, and incomplete but meaningful mitigation recovery. Severity, window, and seed analyses were generated and reviewed, with limitations documented in `docs/final_research_findings.md`. No real-world GSR validation was performed; GSR remains BLOCKED / OPTIONAL.
+- **Step 75 — Final Statistical Analysis & Research Findings:** Completed analysis of 60 unique runspecs and 180 condition observations across 4 windows, 5 seeds, 3 severities, and 3 conditions. The final aggregate results support the main possession degradation finding, the tactical robustness finding, and incomplete but meaningful mitigation recovery. Severity, window, and seed analyses were generated and reviewed, with limitations documented in `docs/final_research_findings.md`. No real-world GSR validation was performed; GSR remains BLOCKED / INCOMPLETE and is required for completion of the original perception and real-broadcast validation scope.
 
-- **Step 76 — SoccerNet-GSR Data Access, GPU Recovery & Perception Readiness Audit:** Audited the checked-out GSR repository at commit `1c958345`, the official example prediction archive, local data directories, model-weight locations, and both Python environments. No SoccerNet-GSR source video, annotations, complete model weights, installed TrackLab runtime, or verifiable local NVIDIA/CUDA environment is available. Objective 1 (real perception adaptation and per-frame GSR output) remains NOT COMPLETE; no GS-HOTA result exists. The exact recovery route, one-sequence baseline command, canonical mapping, storage policy, and GPU recommendation are documented in `docs/gsr_recovery_plan.md` and `docs/gpu_environment.md`. Next actionable step: obtain authorized access to one validation sequence and labels in persistent GPU storage.
+- **Step 76 — SoccerNet-GSR Data Access, GPU Recovery & Perception Readiness Audit:** Audited the checked-out GSR repository at commit `1c958345`, the official example prediction archive, local data directories, model-weight locations, and both Python environments. No SoccerNet-GSR source video, annotations, complete model weights, installed TrackLab runtime, or verifiable local NVIDIA/CUDA environment is available. Objective 1 (real perception adaptation and per-frame GSR output) remains NOT COMPLETE; no GS-HOTA result exists. GSR remains BLOCKED / INCOMPLETE and is required for completion of the original perception and real-broadcast validation scope. The exact recovery route, one-sequence baseline command, canonical mapping, storage policy, and GPU recommendation are documented in `docs/gsr_recovery_plan.md` and `docs/gpu_environment.md`. Next actionable step: obtain authorized access to one validation sequence and labels in persistent GPU storage.
 
-- **Step 77 — SoccerNet-GSR Access & GPU Execution Environment:** Rechecked official access guidance, local data/search paths, the GSR checkout, dependency declarations, model locations, and GPU availability. Authorized validation data, labels, source video, complete weights, installed runtime, and a local NVIDIA/CUDA environment remain unavailable; the public access page was not reachable from the audit environment. No sequence ID was invented and no inference or GS-HOTA evaluation was run. Objective 1 remains INCOMPLETE and GSR remains BLOCKED. Access requirements, sequence metadata checklist, storage constraints, pinned GPU setup, checkpoint requirements, one-sequence command, and success criteria are documented in `docs/gsr_access_checklist.md` and `docs/gsr_gpu_execution_plan.md`. Next actionable step: obtain authorized access to one validation sequence and matching labels in persistent GPU storage.
+- **Step 77 — SoccerNet-GSR Access & GPU Execution Environment:** Rechecked official access guidance, local data/search paths, the GSR checkout, dependency declarations, model locations, and GPU availability. Authorized validation data, labels, source video, complete weights, installed runtime, and a local NVIDIA/CUDA environment remain unavailable; the public access page was not reachable from the audit environment. No sequence ID was invented and no inference or GS-HOTA evaluation was run. Objective 1 remains INCOMPLETE and GSR remains BLOCKED / INCOMPLETE and is required for completion of the original perception and real-broadcast validation scope. Access requirements, sequence metadata checklist, storage constraints, pinned GPU setup, checkpoint requirements, one-sequence command, and success criteria are documented in `docs/gsr_access_checklist.md` and `docs/gsr_gpu_execution_plan.md`. Next actionable step: obtain authorized access to one validation sequence and matching labels in persistent GPU storage.
 
 ---
 
-## 6. Next Steps & Phase 2 Roadmap
-1. **Next: Expand robustness conditions after data verification**
-   - Convert and validate a real GSR output (or another canonical source), align its orientation, then add it as a condition without changing the downstream metric contract.
+## 6. Current Roadmap
+
+### Phase 6 — GSR Perception Completion
+
+#### Step 77 — SoccerNet-GSR Access & GPU Execution Environment
+
+**Status:** BLOCKED
+
+**Current immediate action:** Obtain authorized access to one SoccerNet-GSR validation sequence and matching labels in approved persistent GPU storage.
+
+#### Step 78 — Real One-Sequence GSR Baseline Inference
+
+- Run the official TrackLab/sn-gamestate baseline on one verified validation sequence.
+- Persist configuration, environment, provenance, logs, outputs, and tracker state.
+- Convert verified GSR output into the canonical tracking schema.
+- Preserve source sequence identity, FPS, orientation, team mapping, and coordinate evidence.
+
+#### Step 79 — Perception Evaluation & Adaptation
+
+- Evaluate genuine GSR output using the intended GS-HOTA evaluation path.
+- Analyze detector/tracker/calibration failure modes on broadcast footage.
+- Implement one targeted adaptation only where justified by evidence.
+- Compare baseline versus adapted perception quantitatively.
+- Do not claim improvement without measured evidence.
+
+### Phase 7 — Broadcast Noise and Event Validation
+
+#### Step 80 — Broadcast-Specific Noise Analysis
+
+- Analyze camera-cut fragmentation, frame jitter, missingness, and identity fragmentation on genuine broadcast-derived tracking.
+- Compare reasonable mitigation approaches where needed, including moving average, Kalman-style filtering, and Savitzky-Golay where appropriate.
+- Quantify the effect on downstream geometry and tracking stability.
+
+#### Step 81 — SoccerNet Action Spotting Validation
+
+- Validate ball-free possession/event inference against independent SoccerNet action-spotting labels where compatible.
+- Report precision, recall, and F1.
+- Preserve the anti-leakage design: no ball input and no future-frame leakage.
+
+### Phase 8 — Tactical Decision Modeling
+
+#### Step 82 — Pass Completion Model
+
+- Extend the current Tactical Advantage Score baseline with an interpretable pass-completion probability model.
+- Use player geometry, pressure, support, options, and motion-derived features.
+- Establish a reproducible train/validation/evaluation protocol.
+- Compare the new model against the existing TAS baseline.
+
+#### Step 83 — Counterfactual Pass Ranking
+
+- Generate candidate passes from the player-only game state.
+- Rank counterfactual passing options using the pass-completion/tactical model.
+- Evaluate ranking agreement using appropriate quantitative metrics and, where required, human sanity checks.
+- Do not use ball detection as an input to the ball-free inference pipeline.
+
+### Phase 9 — Final Robustness Benchmark
+
+#### Step 84 — Three-Tier Robustness Benchmark
+
+Extend the existing validated robustness benchmark to:
+
+1. `CLEAN`
+2. `SYNTHETIC-DEGRADED`
+3. `REAL BROADCAST / GSR OUTPUT`
+
+Keep the existing Metrica CLEAN/SYNTHETIC-DEGRADED/NOISE-MITIGATED benchmark intact as the validated controlled development result. Add genuine broadcast/GSR output as the real-world condition once available and compare downstream possession and tactical stability across controlled and real conditions.
+
+#### Step 85 — Cross-Dataset Validation
+
+- Use Metrica as the primary controlled development/reference dataset.
+- Use SkillCorner as complementary external tracking-domain validation.
+- Use SoccerNet-GSR as the genuine broadcast perception source.
+- Document coordinate conventions, temporal resolution, team mapping, and comparability limitations.
+
+#### Step 86 — Final Statistical Analysis
+
+- Re-run or update statistical analysis only after real GSR/broadcast experiments are complete.
+- Report appropriate means, variability, confidence intervals, effect sizes, and robustness comparisons.
+- Clearly distinguish controlled benchmark findings from real-broadcast findings.
+- Freeze final quantitative results only after all required experiments are reproducible.
