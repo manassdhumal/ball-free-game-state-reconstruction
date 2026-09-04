@@ -167,13 +167,16 @@ No inference should be claimed before these prerequisites exist.
 
 ### Phase 7 - Broadcast Noise and Event Validation
 
-#### Step 80 - Broadcast-Specific Noise Analysis
+#### Step 80A — Broadcast-Specific Noise Analysis and Optimization - COMPLETE
 
-- Analyze camera-cut fragmentation, frame jitter, missingness, and identity fragmentation.
-- Compare appropriate smoothing and mitigation approaches, including moving average, Kalman-style filtering, and Savitzky-Golay where appropriate.
-- Quantify effects on downstream geometry and tracking stability.
+- Completed the controlled Metrica broadcast-noise proxy analysis across 48/48 conditions.
+- Compared all configured mitigation methods and evaluated tracking quality, ball-free possession F1, and TAS MAE relative to CLEAN.
+- Added auditable candidate camera-cut/discontinuity evidence, bounded repair, paired statistics, frame-graph caching, and checkpoint/resume support.
+- Genuine SoccerNet-GSR perception remains mandatory for original-scope completion and remains blocked.
 
 #### Step 81 - SoccerNet Action Spotting Validation
+
+**Status:** NEXT / NOT STARTED
 
 - Validate ball-free possession and event inference against compatible independent action-spotting labels.
 - Report precision, recall, and F1.

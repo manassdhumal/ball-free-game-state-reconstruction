@@ -205,6 +205,7 @@ def tactical_scores(
     home_attacks_x1: bool,
     density_radius: float,
     knn_k: Optional[int],
+    frame_graphs: Optional[Mapping[int, Any]] = None,
 ) -> pd.DataFrame:
     """Extract per-frame TAS from tracking plus inferred possession only."""
     tracking = _tracking_only(tracking)
@@ -212,10 +213,12 @@ def tactical_scores(
     output = []
     for row in possession.sort_values("frame").itertuples(index=False):
         frame_data = by_frame[int(row.frame)]
-        graph = build_frame_graph(
-            frame_data, int(row.frame), float(row.timestamp),
-            density_radius=density_radius, knn_k=knn_k,
-        )
+        graph = frame_graphs.get(int(row.frame)) if frame_graphs is not None else None
+        if graph is None:
+            graph = build_frame_graph(
+                frame_data, int(row.frame), float(row.timestamp),
+                density_radius=density_radius, knn_k=knn_k,
+            )
         team = row.team if row.team in {"home", "away"} else None
         features = extract_tactical_features(graph, row.possessor_id, home_attacks_x1=home_attacks_x1)
         score = calculate_tactical_score(features, team) if team else 0.0
@@ -230,13 +233,24 @@ def run_inference_condition(tracking: pd.DataFrame, config: Mapping[str, Any]) -
     """Run graph â†’ ball-free possession â†’ tactical TAS without labels or ball data."""
     tracking = _tracking_only(tracking)
     possession_parameters = dict(config["possession"])
-    possession = predict_possession(tracking, **possession_parameters)
+    frame_graphs = {
+        int(frame): build_frame_graph(
+            frame_data,
+            frame=int(frame),
+            timestamp=float(frame_data["timestamp"].iloc[0]),
+            density_radius=float(possession_parameters.get("density_radius", 0.05)),
+            knn_k=possession_parameters.get("knn_k", 5),
+        )
+        for frame, frame_data in tracking.groupby("frame", sort=False)
+    }
+    possession = predict_possession(tracking, frame_graphs=frame_graphs, **possession_parameters)
     candidates = infer_events(possession)
     tactical = tactical_scores(
         tracking, possession,
         home_attacks_x1=bool(config["orientation"]["home_attacks_x1"]),
         density_radius=float(possession_parameters.get("density_radius", 0.05)),
         knn_k=possession_parameters.get("knn_k", 5),
+        frame_graphs=frame_graphs,
     )
     return {"possession": possession, "candidates": candidates, "tactical": tactical}
 

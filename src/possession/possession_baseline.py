@@ -220,6 +220,7 @@ def predict_possession(
     min_score_threshold: float = 0.10,
     dt: float = 0.04,
     pitch_center: Tuple[float, float] = (0.5, 0.5),
+    frame_graphs: Optional[Dict[int, FrameGraph]] = None,
 ) -> pd.DataFrame:
     """Predict possession for every frame in a canonical tracking DataFrame.
 
@@ -301,14 +302,16 @@ def predict_possession(
         frame_data = df[df["frame"] == frame_num]
         ts = frame_data["timestamp"].iloc[0]
 
-        # Build spatial graph
-        graph = build_frame_graph(
-            frame_data,
-            frame=frame_num,
-            timestamp=ts,
-            density_radius=density_radius,
-            knn_k=knn_k,
-        )
+        # Reuse graphs when the caller has already built them for this condition.
+        graph = frame_graphs.get(frame_num) if frame_graphs is not None else None
+        if graph is None:
+            graph = build_frame_graph(
+                frame_data,
+                frame=frame_num,
+                timestamp=ts,
+                density_radius=density_radius,
+                knn_k=knn_k,
+            )
 
         # Score players
         scores_df = score_frame(

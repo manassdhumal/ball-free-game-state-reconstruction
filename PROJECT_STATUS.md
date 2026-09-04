@@ -3,7 +3,7 @@
 ## 1. Project Overview & Current State
 - **Project Name:** Ball-Free Game State Reconstruction (GSR)
 - **Current Milestone:** Phase 6 - Original-Scope Completion: SoccerNet-GSR Perception, Broadcast Validation, Tactical Pass Modeling & Final Robustness Benchmark
-- **Current Step:** Step 77 - SoccerNet-GSR Access & GPU Execution Environment (investigation complete; execution blocked)
+- **Current Step:** Step 80A - Broadcast-Specific Noise Analysis and Optimization (COMPLETE); Step 81 is next and not started.
 - **Data Integrity Policy:** Raw tracking and event data in `data/raw/` (including `metrica/` and `skillcorner/`) remains strictly untouched, read-only, and gitignored. All intermediate/synthetic/mitigated outputs are generated into `data/interim/` and figures into `results/figures/`.
 
 ---
@@ -67,6 +67,16 @@ The current quantitative robustness benchmark is **validated but not the final c
 - They do not constitute genuine SoccerNet-GSR perception evaluation and do not establish the final real-broadcast robustness claim.
 
 The controlled benchmark remains intact as the validated development result. A genuine broadcast/GSR condition, GS-HOTA evaluation, independent event validation, pass modeling, counterfactual ranking, and final end-to-end validation remain outstanding.
+
+### Step 80A Closeout - COMPLETE
+
+Step 80A completed a controlled broadcast-specific noise analysis using Metrica Sample Game 1 as a proxy. It covered candidate camera-cut/discontinuity evidence, frame-level missingness, bounded short-gap repair, coordinate jitter, apparent discontinuity, and track fragmentation. All eight configured mitigation methods were compared: none, interpolation, moving average, Savitzky-Golay, causal Kalman-style filtering, and interpolation combined with each filter.
+
+The exact experiment used the 0-60 second window, mild/moderate/severe degradation, and seeds 72 and 73. All 48/48 unique conditions completed with finite metrics and no duplicates or missing rows. `interpolation_kalman` had the best mean possession F1 (`0.419522`) and mean TAS MAE relative to CLEAN (`0.110128`). Candidate cuts are auditable evidence signals, not ground-truth shot-boundary labels; inference remained ball-free and TAS retained the existing definition.
+
+Profiling identified repeated per-frame spatial graph construction as the bottleneck. Per-condition frame-graph caching reduced representative runtime from `0.680111 s` to `0.446889 s` (`1.522x`), with exactly equal possession outputs, TAS maximum absolute difference `0.0`, and tracking-metric difference `0.0`. Atomic checkpoint/resume support was implemented and verified.
+
+Step 80A artifacts are isolated under `results/step80/`, including the ablation table, candidate-cut table, summary statistics, checkpoint metadata, and five required figures. Focused tests passed 9/9; the full regression suite passed 170 tests with 11 expected skips. Genuine SoccerNet-GSR perception remains blocked/incomplete and mandatory for original-scope completion.
 
 ---
 
