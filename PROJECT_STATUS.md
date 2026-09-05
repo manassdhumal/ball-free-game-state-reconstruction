@@ -3,7 +3,7 @@
 ## 1. Project Overview & Current State
 - **Project Name:** Ball-Free Game State Reconstruction (GSR)
 - **Current Milestone:** Phase 6 - Original-Scope Completion: SoccerNet-GSR Perception, Broadcast Validation, Tactical Pass Modeling & Final Robustness Benchmark
-- **Current Step:** Step 80A - Broadcast-Specific Noise Analysis and Optimization (COMPLETE); Step 81 is next and not started.
+- **Current Step:** Step 81 - Controlled Ball-Free Event Evaluation (COMPLETE); Step 82 is next and not started.
 - **Data Integrity Policy:** Raw tracking and event data in `data/raw/` (including `metrica/` and `skillcorner/`) remains strictly untouched, read-only, and gitignored. All intermediate/synthetic/mitigated outputs are generated into `data/interim/` and figures into `results/figures/`.
 
 ---
@@ -67,6 +67,12 @@ The current quantitative robustness benchmark is **validated but not the final c
 - They do not constitute genuine SoccerNet-GSR perception evaluation and do not establish the final real-broadcast robustness claim.
 
 The controlled benchmark remains intact as the validated development result. A genuine broadcast/GSR condition, GS-HOTA evaluation, independent event validation, pass modeling, counterfactual ranking, and final end-to-end validation remain outstanding.
+
+### Step 81 Closeout - COMPLETE
+
+Step 81 evaluated player-only possession transitions against available Metrica event annotations. The exact setup used Sample Game 1 frames 1-1500 (0-60 seconds at 25 FPS), fixed existing ball-free inference, and post-hoc labels only. Supported mappings were `pass_candidate` to `PASS`, `turnover_candidate` to `BALL LOST`/`BALL OUT`, and `recovery_candidate` to `RECOVERY`; `CHALLENGE` and `SET PIECE` were excluded.
+
+One-to-one matching was evaluated at ±0.20, ±0.50, and ±1.00 seconds. Aggregate TP/FP/FN were `(4,52,24)`, `(6,50,22)`, and `(11,45,17)`, with F1 `0.095238`, `0.142857`, and `0.261905`; the strongest aggregate result was F1 `0.261905` at ±1.00 seconds. Outputs are isolated under `results/step81/`. Focused tests passed 5/5 and the full suite passed 175 tests with 11 expected skips. This is controlled annotated player/event validation, not SoccerNet-GSR or real-broadcast performance; GSR remains BLOCKED / INCOMPLETE and required for original-scope completion.
 
 ### Step 80A Closeout - COMPLETE
 
@@ -161,17 +167,23 @@ Step 80A artifacts are isolated under `results/step80/`, including the ablation 
 
 ### Phase 7 — Broadcast Noise and Event Validation
 
-#### Step 80 — Broadcast-Specific Noise Analysis
+#### Step 80A — Broadcast-Specific Noise Analysis and Optimization - COMPLETE
 
-- Analyze camera-cut fragmentation, frame jitter, missingness, and identity fragmentation on genuine broadcast-derived tracking.
-- Compare reasonable mitigation approaches where needed, including moving average, Kalman-style filtering, and Savitzky-Golay where appropriate.
-- Quantify the effect on downstream geometry and tracking stability.
+- Completed the controlled Metrica broadcast-noise proxy analysis across 48/48 conditions.
+- Compared all configured mitigation methods and evaluated tracking quality, ball-free possession F1, and TAS MAE relative to CLEAN.
+- Added auditable candidate camera-cut/discontinuity evidence, bounded repair, paired statistics, frame-graph caching, and checkpoint/resume support.
+- Genuine SoccerNet-GSR perception remains mandatory for original-scope completion and remains blocked.
 
-#### Step 81 — SoccerNet Action Spotting Validation
+#### Step 81 — Controlled Ball-Free Event Evaluation - COMPLETE
 
-- Validate ball-free possession/event inference against independent SoccerNet action-spotting labels where compatible.
-- Report precision, recall, and F1.
-- Preserve the anti-leakage design: no ball input and no future-frame leakage.
+- Evaluated player-only possession transitions against available Metrica event annotations.
+- Used one-to-one matching at ±0.20, ±0.50, and ±1.00 seconds with per-type and aggregate TP/FP/FN, precision, recall, F1, and timing error.
+- Produced isolated machine-readable metrics, tolerance analysis, summary JSON, and figures under `results/step81/`.
+- This does not claim SoccerNet-GSR or real-broadcast performance; genuine GSR remains required and incomplete.
+
+#### Step 82 — Pass Completion Model
+
+**Status:** NEXT / NOT STARTED
 
 ### Phase 8 — Tactical Decision Modeling
 

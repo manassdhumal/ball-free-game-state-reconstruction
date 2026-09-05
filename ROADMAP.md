@@ -174,14 +174,16 @@ No inference should be claimed before these prerequisites exist.
 - Added auditable candidate camera-cut/discontinuity evidence, bounded repair, paired statistics, frame-graph caching, and checkpoint/resume support.
 - Genuine SoccerNet-GSR perception remains mandatory for original-scope completion and remains blocked.
 
-#### Step 81 - SoccerNet Action Spotting Validation
+#### Step 81 - Controlled Ball-Free Event Evaluation - COMPLETE
+
+- Evaluated player-only possession transitions against available Metrica event annotations.
+- Used one-to-one matching at ±0.20, ±0.50, and ±1.00 seconds with per-type and aggregate TP/FP/FN, precision, recall, F1, and timing error.
+- Produced isolated machine-readable metrics, tolerance analysis, summary JSON, and figures under `results/step81/`.
+- This does not claim SoccerNet-GSR or real-broadcast performance; genuine GSR remains required and incomplete.
+
+#### Step 82 - Pass Completion Model
 
 **Status:** NEXT / NOT STARTED
-
-- Validate ball-free possession and event inference against compatible independent action-spotting labels.
-- Report precision, recall, and F1.
-- Preserve the ball-free and anti-leakage constraints.
-- Do not use future-frame or ball information as inference inputs.
 
 ### Phase 8 - Tactical Decision Modeling
 
