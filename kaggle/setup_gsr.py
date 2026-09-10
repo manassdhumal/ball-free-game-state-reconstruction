@@ -3,7 +3,7 @@
 Kaggle / Colab GPU Setup and Verification Script for SoccerNet-GSR (sn-gamestate).
 
 Purpose:
-  1. Verifies attached NVIDIA GPU hardware and CUDA environment.
+  1. Verifies attached NVIDIA GPU hardware and CUDA environment (including multi-GPU T4 x2).
   2. Bootstraps a dedicated Python 3.9 virtual environment via `uv`.
   3. Clones and installs the pinned SoccerNet-GSR (sn-gamestate) repository.
   4. Resolves and installs pinned dependencies (PyTorch, TrackLab, MMCV, MMDetection, MMOCR).
@@ -41,7 +41,7 @@ def _run_cmd(cmd: List[str], cwd: Optional[Path] = None, env: Optional[Dict[str,
 
 
 def audit_hardware(output_dir: Path) -> Dict[str, Any]:
-    """Inspect local hardware, OS, and CUDA availability."""
+    """Inspect local hardware, OS, multi-GPU devices, and CUDA availability."""
     output_dir.mkdir(parents=True, exist_ok=True)
     env_info: Dict[str, Any] = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
@@ -67,8 +67,9 @@ def audit_hardware(output_dir: Path) -> Dict[str, Any]:
         "torch": {
             "version": None,
             "cuda_available": False,
+            "device_count": 0,
             "cuda_version": None,
-            "device_name": None,
+            "devices": [],
         },
     }
 
@@ -103,9 +104,17 @@ def audit_hardware(output_dir: Path) -> Dict[str, Any]:
         import torch  # type: ignore
         env_info["torch"]["version"] = torch.__version__
         env_info["torch"]["cuda_available"] = bool(torch.cuda.is_available())
+        env_info["torch"]["device_count"] = torch.cuda.device_count() if torch.cuda.is_available() else 0
         if torch.cuda.is_available():
             env_info["torch"]["cuda_version"] = torch.version.cuda
-            env_info["torch"]["device_name"] = torch.cuda.get_device_name(0)
+            for i in range(torch.cuda.device_count()):
+                prop = torch.cuda.get_device_properties(i)
+                env_info["torch"]["devices"].append({
+                    "index": i,
+                    "name": torch.cuda.get_device_name(i),
+                    "total_memory_mb": round(prop.total_memory / (1024 * 1024), 2),
+                    "multi_processor_count": prop.multi_processor_count,
+                })
     except ImportError:
         pass
 
@@ -116,9 +125,31 @@ def audit_hardware(output_dir: Path) -> Dict[str, Any]:
     return env_info
 
 
+def save_package_inventory(venv_python: Path, output_dir: Path) -> None:
+    """Records installed packages into package_versions.json and package_versions.txt."""
+    output_dir.mkdir(parents=True, exist_ok=True)
+    pip_freeze = _run_cmd([str(venv_python), "-m", "pip", "list", "--format=json"])
+    if pip_freeze.returncode == 0:
+        try:
+            packages = json.loads(pip_freeze.stdout)
+            json_path = output_dir / "package_versions.json"
+            with open(json_path, "w", encoding="utf-8") as f:
+                json.dump(packages, f, indent=2)
+            print(f"[INFO] Package inventory saved to: {json_path}")
+
+            txt_path = output_dir / "package_versions.txt"
+            with open(txt_path, "w", encoding="utf-8") as f:
+                for pkg in packages:
+                    f.write(f"{pkg['name']}=={pkg['version']}\n")
+            print(f"[INFO] Package versions list saved to: {txt_path}")
+        except Exception as e:
+            print(f"[WARN] Failed to parse package inventory JSON: {e}")
+
+
 def bootstrap_gsr_env(
     workspace_root: Path,
     gsr_repo_dir: Path,
+    output_dir: Path,
     python_version: str = "3.9",
     gsr_git_url: str = "https://github.com/SoccerNet/sn-gamestate.git",
     gsr_git_ref: str = "main",
@@ -179,6 +210,8 @@ def bootstrap_gsr_env(
         _run_cmd([str(mim_bin), "install", "mmdet~=3.1.0"])
         _run_cmd([str(mim_bin), "install", "mmocr==1.0.1"])
 
+    # 7. Save package inventory
+    save_package_inventory(venv_python, output_dir)
     return venv_python
 
 
@@ -216,7 +249,9 @@ def main() -> int:
     if not gpu_available and not torch_cuda:
         print("\n[WARNING] No active NVIDIA CUDA GPU detected in current execution environment.")
         print("          Full deep learning inference requires a Linux GPU environment (Kaggle/Colab).")
+        return 1
 
+    bootstrap_gsr_env(workspace_root=Path.cwd(), gsr_repo_dir=gsr_dir, output_dir=out_dir)
     return 0
 
 
