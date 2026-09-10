@@ -33,4 +33,4 @@ The repository provides automated scripts under `kaggle/`:
 - `kaggle/setup_gsr.py`: Verifies GPU attachment, installs Python 3.9 venv, and builds dependencies.
 - `kaggle/run_gsr.py`: Enforces the **One-Sequence Policy**, capturing stdout/stderr and telemetry.
 - `kaggle/export_gsr.py`: Converts raw TrackLab predictions into Canonical Tracking Schema v0.2.0 with SHA256 manifests.
-- `kaggle/gsr_validation.ipynb`: Rerunnable 10-stage notebook.
+- `kaggle/gsr_validation.ipynb`: Rerunnable 12-stage notebook.
