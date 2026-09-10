@@ -198,16 +198,20 @@ Implemented in `src/tactics/`, configured by `configs/step82_tactical_pass_model
 
 #### Step 83 - Counterfactual Pass Ranking
 
-**Status: NEXT / NOT STARTED**
+**Status: COMPLETE**
 
 - Generate candidate passes from player-only game state.
 - Estimate and rank candidate pass outcomes.
 - Evaluate ranking quality quantitatively and include human sanity checks where required.
 - Do not introduce ball detection into the inference pipeline.
 
+Implemented with player-only counterfactual scoring, perturbation stability, decision-flip analysis, baseline comparison, weight sensitivity, scenarios, anti-leakage tests, and isolated `results/step83/` artifacts. Controlled Metrica results do not claim real-broadcast/GSR performance.
+
 ### Phase 9 - Final Robustness and Cross-Dataset Validation
 
 #### Step 84 - Three-Tier Robustness Benchmark
+
+**Status: NEXT / NOT STARTED**
 
 Final conditions:
 
