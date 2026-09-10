@@ -74,7 +74,7 @@ def validate_canonical_dataframe(df: pd.DataFrame) -> None:
     valid_teams = {"home", "away", "referee"}
     invalid_teams = set(df["team"].unique()) - valid_teams
     if invalid_teams:
-        raise ValueError(f"Invalid team values found: {invalid_teams}")
+        raise ValueError(f"Invalid team values found: {invalid_teams}. Allowed: {valid_teams}")
 
     dups = df.duplicated(subset=["match_id", "frame", "team", "player_id"])
     if dups.any():
@@ -88,16 +88,19 @@ def convert_raw_tracklab_to_canonical(
     normalize_coords: bool = True,
     pitch_length: float = 105.0,
     pitch_width: float = 68.0,
+    team_mapping: Optional[Dict[str, str]] = None,
 ) -> pd.DataFrame:
     """
     Converts raw TrackLab prediction DataFrame to canonical tracking DataFrame.
 
-    Expected raw columns from TrackLab:
-      frame / image_id, track_id, bbox_ltwh / bbox, team, x_bottom_middle / pitch_x, pitch_y, confidence
+    Avoids silent fallbacks:
+      - Validates and maps team names explicitly; raises ValueError if unmapped.
+      - Preserves missing coordinates as NaN without arbitrary imputation.
+      - Distinguishes direct detection from extrapolated/unobserved tracks.
     """
     rows: List[Dict[str, Any]] = []
 
-    # Map column names dynamically
+    # Map column names dynamically based on TrackLab / SoccerNet output conventions
     frame_col = "frame" if "frame" in raw_df.columns else ("image_id" if "image_id" in raw_df.columns else "frame_idx")
     track_col = "track_id" if "track_id" in raw_df.columns else ("player_id" if "player_id" in raw_df.columns else "id")
     team_col = "team" if "team" in raw_df.columns else "team_id"
@@ -105,19 +108,36 @@ def convert_raw_tracklab_to_canonical(
     y_col = "pitch_y" if "pitch_y" in raw_df.columns else ("y" if "y" in raw_df.columns else "y_bottom_middle")
     conf_col = "confidence" if "confidence" in raw_df.columns else ("detection_confidence" if "detection_confidence" in raw_df.columns else "score")
 
-    for _, r in raw_df.iterrows():
+    default_team_map = {
+        "0": "home", "home": "home", "team_0": "home", "team_left": "home", "left": "home",
+        "1": "away", "away": "away", "team_1": "away", "team_right": "away", "right": "away",
+        "2": "referee", "referee": "referee", "ref": "referee",
+    }
+    mapping = team_mapping or default_team_map
+
+    for idx, r in raw_df.iterrows():
         f_val = int(r[frame_col])
         pid_raw = r[track_col]
         pid_str = str(int(pid_raw)) if isinstance(pid_raw, (int, float, np.integer, np.floating)) and not pd.isna(pid_raw) else str(pid_raw)
 
-        # Team mapping
-        raw_team = str(r[team_col]).lower() if team_col in r and not pd.isna(r[team_col]) else "home"
-        if "away" in raw_team or raw_team in ["1", "away"]:
-            team_val = "away"
-        elif "ref" in raw_team or raw_team in ["2", "referee"]:
-            team_val = "referee"
+        # Team mapping with explicit validation
+        if team_col in r and not pd.isna(r[team_col]):
+            raw_team_key = str(r[team_col]).lower().strip()
+            if raw_team_key in mapping:
+                team_val = mapping[raw_team_key]
+            elif "away" in raw_team_key or "1" == raw_team_key:
+                team_val = "away"
+            elif "ref" in raw_team_key or "2" == raw_team_key:
+                team_val = "referee"
+            elif "home" in raw_team_key or "0" == raw_team_key:
+                team_val = "home"
+            else:
+                raise ValueError(
+                    f"Row {idx}: Unrecognized team value '{r[team_col]}' in GSR output. "
+                    f"Expected mapping keys in {list(mapping.keys())}."
+                )
         else:
-            team_val = "home"
+            raise ValueError(f"Row {idx}: Missing team value in GSR tracking output for player '{pid_str}'.")
 
         # Coordinates
         raw_x = r[x_col] if x_col in r and not pd.isna(r[x_col]) else np.nan
@@ -139,8 +159,12 @@ def convert_raw_tracklab_to_canonical(
             norm_x = np.nan
             norm_y = np.nan
 
-        conf = float(r[conf_col]) if conf_col in r and not pd.isna(r[conf_col]) else 1.0
-        conf_clamped = max(0.0, min(1.0, conf))
+        # Confidence: clamp valid scores; do not invent 1.0 if genuinely absent
+        if conf_col in r and not pd.isna(r[conf_col]):
+            conf_clamped = max(0.0, min(1.0, float(r[conf_col])))
+        else:
+            conf_clamped = 0.0  # Uncalibrated / absent confidence proxy
+
         visible = not np.isnan(norm_x) and not np.isnan(norm_y) and conf_clamped > 0.1
 
         rows.append({
@@ -166,19 +190,16 @@ def compute_tracking_quality_metrics(df: pd.DataFrame) -> pd.DataFrame:
     total_frames = df["frame"].nunique()
     unique_players = df["player_id"].nunique()
 
-    # Track length statistics
     track_lengths = df.groupby("player_id")["frame"].count()
     min_track = int(track_lengths.min()) if not track_lengths.empty else 0
     max_track = int(track_lengths.max()) if not track_lengths.empty else 0
     avg_track = float(track_lengths.mean()) if not track_lengths.empty else 0.0
 
-    # Missingness and coordinate validity
     missing_coords = df["x"].isna() | df["y"].isna()
     missingness_rate = float(missing_coords.mean()) if total_obs > 0 else 0.0
     detected_rate = float(df["visible"].mean()) if total_obs > 0 else 0.0
     mean_conf = float(df["confidence"].mean()) if total_obs > 0 else 0.0
 
-    # Summary table
     summary_data = [{
         "match_id": str(df["match_id"].iloc[0]) if not df.empty else "N/A",
         "total_frames": total_frames,
@@ -190,10 +211,10 @@ def compute_tracking_quality_metrics(df: pd.DataFrame) -> pd.DataFrame:
         "min_track_length": min_track,
         "max_track_length": max_track,
         "avg_track_length": avg_track,
-        "x_min": float(df["x"].min()),
-        "x_max": float(df["x"].max()),
-        "y_min": float(df["y"].min()),
-        "y_max": float(df["y"].max()),
+        "x_min": float(df["x"].min()) if not df["x"].isna().all() else np.nan,
+        "x_max": float(df["x"].max()) if not df["x"].isna().all() else np.nan,
+        "y_min": float(df["y"].min()) if not df["y"].isna().all() else np.nan,
+        "y_max": float(df["y"].max()) if not df["y"].isna().all() else np.nan,
     }]
     return pd.DataFrame(summary_data)
 
@@ -203,6 +224,8 @@ def export_gsr_package(
     output_dir: Path,
     match_id: str = "gsr_valid_sngs04",
     fps: float = 25.0,
+    pitch_length: float = 105.0,
+    pitch_width: float = 68.0,
 ) -> Dict[str, Any]:
     """Reads raw TrackLab output, transforms to canonical schema, and produces export package."""
     exports_dir = output_dir / "exports"
@@ -221,7 +244,13 @@ def export_gsr_package(
         raise ValueError(f"Unsupported file format: {raw_output_path}")
 
     # Convert to canonical
-    canonical_df = convert_raw_tracklab_to_canonical(raw_df, match_id=match_id, fps=fps)
+    canonical_df = convert_raw_tracklab_to_canonical(
+        raw_df,
+        match_id=match_id,
+        fps=fps,
+        pitch_length=pitch_length,
+        pitch_width=pitch_width,
+    )
     canonical_csv_path = exports_dir / "gsr_tracking_canonical.csv"
     canonical_df.to_csv(canonical_csv_path, index=False)
     print(f"[INFO] Exported canonical tracking CSV ({len(canonical_df)} rows) to: {canonical_csv_path}")
@@ -258,6 +287,7 @@ def export_gsr_package(
         "timestamp_export": datetime.now(timezone.utc).isoformat(),
         "match_id": match_id,
         "fps": fps,
+        "pitch_dimensions": {"length": pitch_length, "width": pitch_width},
         "canonical_csv": {
             "path": str(canonical_csv_path),
             "rows": len(canonical_df),
@@ -283,6 +313,8 @@ def main() -> int:
     parser.add_argument("--output-dir", type=str, default="results/gsr_kaggle", help="Output directory for exports")
     parser.add_argument("--match-id", type=str, default="gsr_valid_sngs04", help="Canonical match identifier")
     parser.add_argument("--fps", type=float, default=25.0, help="Frame rate")
+    parser.add_argument("--pitch-length", type=float, default=105.0, help="Field length in meters")
+    parser.add_argument("--pitch-width", type=float, default=68.0, help="Field width in meters")
     args = parser.parse_args()
 
     raw_path = Path(args.raw_output)
@@ -292,7 +324,14 @@ def main() -> int:
         print(f"[ERROR] Raw output file does not exist: {raw_path}", file=sys.stderr)
         return 1
 
-    export_gsr_package(raw_output_path=raw_path, output_dir=out_dir, match_id=args.match_id, fps=args.fps)
+    export_gsr_package(
+        raw_output_path=raw_path,
+        output_dir=out_dir,
+        match_id=args.match_id,
+        fps=args.fps,
+        pitch_length=args.pitch_length,
+        pitch_width=args.pitch_width,
+    )
     return 0
 
 
