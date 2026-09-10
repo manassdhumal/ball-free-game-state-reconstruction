@@ -3,7 +3,7 @@
 ## 1. Project Overview & Current State
 - **Project Name:** Ball-Free Game State Reconstruction (GSR)
 - **Current Milestone:** Phase 6 - Original-Scope Completion: SoccerNet-GSR Perception, Broadcast Validation, Tactical Pass Modeling & Final Robustness Benchmark
-- **Current Step:** Step 81 - Controlled Ball-Free Event Evaluation (COMPLETE); Step 82 is next and not started.
+- **Current Step:** Step 82 - Tactical Pass Model (COMPLETE); Step 83 is next and not started.
 - **Data Integrity Policy:** Raw tracking and event data in `data/raw/` (including `metrica/` and `skillcorner/`) remains strictly untouched, read-only, and gitignored. All intermediate/synthetic/mitigated outputs are generated into `data/interim/` and figures into `results/figures/`.
 
 ---
@@ -52,7 +52,7 @@
 
 - **Research foundation:** Phases 0-5 are complete and form the validated downstream research foundation: canonical ingestion, tracking-quality analysis, noise/degradation and mitigation, ball-free possession/event inference, tactical scoring, and the controlled robustness benchmark with final statistical analysis.
 - **Primary remaining research gap:** Genuine broadcast-video perception through SoccerNet-GSR, including real player detections/tracking and GS-HOTA evaluation.
-- **Secondary remaining research gaps:** Independent action-spotting validation, pass-completion probability modeling, counterfactual pass ranking, and a real-broadcast robustness tier.
+- **Secondary remaining research gaps:** Independent action-spotting validation, explicit-outcome pass-completion probability validation, and a real-broadcast robustness tier.
 - **Current blocker:** Authorized SoccerNet-GSR data and matching labels, complete perception checkpoints/runtime, and an approved GPU execution environment are not currently available.
 
 ---
@@ -73,6 +73,14 @@ The controlled benchmark remains intact as the validated development result. A g
 Step 81 evaluated player-only possession transitions against available Metrica event annotations. The exact setup used Sample Game 1 frames 1-1500 (0-60 seconds at 25 FPS), fixed existing ball-free inference, and post-hoc labels only. Supported mappings were `pass_candidate` to `PASS`, `turnover_candidate` to `BALL LOST`/`BALL OUT`, and `recovery_candidate` to `RECOVERY`; `CHALLENGE` and `SET PIECE` were excluded.
 
 One-to-one matching was evaluated at ±0.20, ±0.50, and ±1.00 seconds. Aggregate TP/FP/FN were `(4,52,24)`, `(6,50,22)`, and `(11,45,17)`, with F1 `0.095238`, `0.142857`, and `0.261905`; the strongest aggregate result was F1 `0.261905` at ±1.00 seconds. Outputs are isolated under `results/step81/`. Focused tests passed 5/5 and the full suite passed 175 tests with 11 expected skips. This is controlled annotated player/event validation, not SoccerNet-GSR or real-broadcast performance; GSR remains BLOCKED / INCOMPLETE and required for original-scope completion.
+
+### Step 82 Closeout - COMPLETE
+
+Step 82 added player-only hypothetical pass candidate generation, interpretable geometry/pressure/support/space features, a deterministic regularized logistic model with an honest heuristic fallback, and counterfactual ranking. The exact experiment used Metrica Sample Game 1 frames 1-1500 (0-60 seconds at 25 FPS), `home_attacks_x1=true`, default candidate distance bounds 0.02-0.70, and fixed ranking weights from `configs/step82_tactical_pass_model.yaml`.
+
+The canonical Metrica event schema exposes 15 PASS source/receiver mappings in this window but no explicit completion outcome. Therefore reliable binary completion labels are 0, the learned model falls back to the fixed heuristic, and ROC-AUC, PR-AUC, Brier, log loss, calibration, and completion ablations are explicitly not estimable. Ranking was evaluated only against those identifiable annotated receivers: 15 states and 149 candidates. The fallback pass ranking achieved MRR 0.4440, NDCG 0.5738, top-1 agreement 0.2667, and top-3 inclusion 0.5333. The nearest-teammate baseline was strongest (MRR 0.6478, top-1 0.5333); most-forward and TAS-style baselines each had MRR 0.3313 and top-1 0.1333. These are target-ranking results, not completion claims.
+
+Implementation is in `src/tactics/pass_candidates.py`, `src/tactics/pass_probability.py`, `src/tactics/pass_ranking.py`, and `src/validation/run_step82.py`; documentation is `docs/step82_tactical_pass_model.md`; configuration is `configs/step82_tactical_pass_model.yaml`; isolated outputs are under `results/step82/`. Focused Step 82 tests passed 5/5 and the full suite passed 180 tests with 11 expected skips. SoccerNet-GSR remains BLOCKED / INCOMPLETE and is not falsely claimed complete.
 
 ### Step 80A Closeout - COMPLETE
 
