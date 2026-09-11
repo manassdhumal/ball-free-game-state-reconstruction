@@ -1,0 +1,20 @@
+{
+  "dataset": "Metrica Sample Game 1",
+  "match": {
+    "match_id": "metrica_sample_game_1",
+    "home_tracking_path": "data/raw/metrica/data/Sample_Game_1/Sample_Game_1_RawTrackingData_Home_Team.csv",
+    "away_tracking_path": "data/raw/metrica/data/Sample_Game_1/Sample_Game_1_RawTrackingData_Away_Team.csv",
+    "events_path": "data/raw/metrica/data/Sample_Game_1/Sample_Game_1_RawEventsData.csv",
+    "start_frame": 1,
+    "end_frame": 1500,
+    "fps": 25.0
+  },
+  "orientation": {"home_attacks_x1": true},
+  "candidates": {"max_distance": 0.70, "min_distance": 0.02, "support_radius": 0.15, "obstruction_radius": 0.035},
+  "model": {"type": "logistic_regression", "minimum_examples_per_class": 10, "regularization": 0.05, "learning_rate": 0.08, "iterations": 500},
+  "split": {"development": "chronological_first_70_percent", "evaluation": "chronological_last_30_percent", "labels_required": true},
+  "ranking_weights": {"success": 0.55, "progress": 0.20, "space": 0.15, "support": 0.10, "pressure": 0.10, "distance": 0.05},
+  "top_k": [1, 3, 5],
+  "random_seed": 82,
+  "output_directory": "results/step82"
+}

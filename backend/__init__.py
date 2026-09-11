@@ -1,0 +1,1 @@
+"""FastAPI adapter for the ball-free research system."""

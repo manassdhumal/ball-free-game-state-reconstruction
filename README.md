@@ -1,3 +1,25 @@
+
+## Local Application
+
+The preserved Lovable frontend is in `frontend/`; the FastAPI adapter is in `backend/`. Python research modules under `src/` and historical results under `results/step80/` through `results/step83/` remain the source of truth.
+
+Prerequisites: Python with the repository `.venv`, Node.js/npm, and the backend requirements in `backend/requirements.txt`.
+
+Start the backend:
+
+```powershell
+.\start_backend.ps1
+```
+
+Start the frontend in a second terminal:
+
+```powershell
+.\start_frontend.ps1
+```
+
+The API is `http://localhost:8000` and its documentation is `http://localhost:8000/docs`. The frontend is `http://localhost:5173`. Set `VITE_API_BASE_URL` in `frontend/.env.local` when using another API origin; see `frontend/.env.example`. Current-frame pass ranking uses the existing heuristic fallback and is not a pass-completion probability; possession timeline materialization remains pending.
+
+See [docs/frontend_backend_architecture.md](docs/frontend_backend_architecture.md) for the API list, data flow, result mapping, GSR boundary, and troubleshooting.
 # Ball-Free Game State Reconstruction
 
 A computer-vision research project for reconstructing selected football game-state signals from player tracking without using ball coordinates during possession or tactical inference. The system covers Metrica and SkillCorner-compatible ingestion, canonical player tracking, tracking-quality analysis, synthetic degradation, bounded interpolation and smoothing, a player-only spatial graph, heuristic possession/event inference, interpretable tactical scoring, and task-driven robustness evaluation.

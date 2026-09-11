@@ -183,24 +183,35 @@ No inference should be claimed before these prerequisites exist.
 
 #### Step 82 - Pass Completion Model
 
-**Status:** NEXT / NOT STARTED
+**Status:** COMPLETE
+
+- Added player-only pass candidates, interpretable probability/fallback modeling, counterfactual ranking, baselines, artifacts, documentation, and anti-leakage tests.
+- Metrica Sample Game 1 has no explicit completion labels, so learned probability metrics are honestly unavailable; annotated receiver ranking is reported separately.
 
 ### Phase 8 - Tactical Decision Modeling
 
 #### Step 82 - Pass Completion Model
 
-Extend the current TAS baseline with an interpretable pass-completion probability model using player-only pressure, support, forward options, spatial geometry, and motion-derived features. Establish reproducible train/validation/evaluation procedures and compare the model with the existing TAS baseline.
+**Status: COMPLETE**
+
+Implemented in `src/tactics/`, configured by `configs/step82_tactical_pass_model.yaml`, documented in `docs/step82_tactical_pass_model.md`, and isolated under `results/step82/`. The Metrica subset supports receiver-ranking evaluation but not a defensible binary completion target.
 
 #### Step 83 - Counterfactual Pass Ranking
+
+**Status: COMPLETE**
 
 - Generate candidate passes from player-only game state.
 - Estimate and rank candidate pass outcomes.
 - Evaluate ranking quality quantitatively and include human sanity checks where required.
 - Do not introduce ball detection into the inference pipeline.
 
+Implemented with player-only counterfactual scoring, perturbation stability, decision-flip analysis, baseline comparison, weight sensitivity, scenarios, anti-leakage tests, and isolated `results/step83/` artifacts. Controlled Metrica results do not claim real-broadcast/GSR performance.
+
 ### Phase 9 - Final Robustness and Cross-Dataset Validation
 
 #### Step 84 - Three-Tier Robustness Benchmark
+
+**Status: NEXT / NOT STARTED**
 
 Final conditions:
 
