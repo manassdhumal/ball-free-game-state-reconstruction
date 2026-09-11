@@ -152,6 +152,23 @@ def execute_one_sequence(
 
     duration = time.time() - start_time
     print(f"\n[INFO] Inference completed in {duration:.2f}s with exit code: {exit_code}")
+
+    # Harvest predictions into output_dir / predictions
+    pred_dir = output_dir / "predictions"
+    pred_dir.mkdir(parents=True, exist_ok=True)
+    candidates = []
+    for d in [gsr_dir / "outputs", output_dir / "tracklab_output"]:
+        if d.exists():
+            for ext in ("*.csv", "*.json", "*.pklz"):
+                candidates.extend(list(d.glob(f"**/{ext}")))
+
+    if candidates:
+        candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+        newest = candidates[0]
+        dest = pred_dir / f"{sequence_id}{newest.suffix}"
+        shutil.copy2(newest, dest)
+        print(f"[INFO] Harvested prediction file: {newest} -> {dest}")
+
     return exit_code
 
 

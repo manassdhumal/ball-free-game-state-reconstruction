@@ -239,7 +239,46 @@ def export_gsr_package(
     elif str(raw_output_path).endswith(".json"):
         with open(raw_output_path, "r", encoding="utf-8") as jf:
             raw_data = json.load(jf)
-        raw_df = pd.DataFrame(raw_data)
+        if isinstance(raw_data, list):
+            raw_df = pd.DataFrame(raw_data)
+        elif isinstance(raw_data, dict):
+            if "predictions" in raw_data:
+                preds = raw_data["predictions"]
+                if isinstance(preds, list):
+                    raw_df = pd.DataFrame(preds)
+                elif isinstance(preds, dict):
+                    flat_rows = []
+                    for img_id, dets in preds.items():
+                        if isinstance(dets, list):
+                            for d in dets:
+                                if isinstance(d, dict):
+                                    row = dict(d)
+                                    row.setdefault("image_id", img_id)
+                                    flat_rows.append(row)
+                    raw_df = pd.DataFrame(flat_rows)
+                else:
+                    raw_df = pd.DataFrame(raw_data)
+            else:
+                flat_rows = []
+                for k, v in raw_data.items():
+                    if isinstance(v, list):
+                        for item in v:
+                            if isinstance(item, dict):
+                                row = dict(item)
+                                row.setdefault("frame", k)
+                                flat_rows.append(row)
+                raw_df = pd.DataFrame(flat_rows) if flat_rows else pd.DataFrame([raw_data])
+    elif str(raw_output_path).endswith((".pklz", ".pkl")):
+        import gzip, pickle
+        opener = gzip.open if str(raw_output_path).endswith(".pklz") else open
+        with opener(raw_output_path, "rb") as pf:
+            tracker_state = pickle.load(pf)
+        if hasattr(tracker_state, "detections"):
+            raw_df = tracker_state.detections
+        elif isinstance(tracker_state, dict) and "detections" in tracker_state:
+            raw_df = tracker_state["detections"]
+        else:
+            raw_df = pd.DataFrame(tracker_state)
     else:
         raise ValueError(f"Unsupported file format: {raw_output_path}")
 
