@@ -181,6 +181,9 @@ def execute_one_sequence(
             dest = pred_dir / f"{sequence_id}{newest.suffix}"
             shutil.copy2(newest, dest)
             print(f"[INFO] Harvested prediction file: {newest} -> {dest}")
+            if sequence_id.startswith("SNGS-04"):
+                shutil.copy2(newest, pred_dir / f"SNGS-04{newest.suffix}")
+                shutil.copy2(newest, pred_dir / f"SNGS-040{newest.suffix}")
 
     return exit_code
 
@@ -238,9 +241,28 @@ def main() -> int:
         return 1
 
     # 3. Check if sequence data exists, or automatically download it
-    seq_path = data_dir / args.split / args.sequence_id
+    split_dir = data_dir / args.split
+    split_dir.mkdir(parents=True, exist_ok=True)
+    target_seq = args.sequence_id
+    seq_path = split_dir / target_seq
+
+    # Auto-resolve exact 3-digit sequence ID if 2-digit was provided (e.g., SNGS-04 -> SNGS-040)
     if not seq_path.exists() or not any(seq_path.iterdir() if seq_path.is_dir() else []):
-        print(f"[INFO] Sequence '{args.sequence_id}' not found locally at '{seq_path}'.")
+        existing = sorted([p for p in split_dir.glob(f"{target_seq}*") if p.is_dir() and any(p.iterdir())])
+        if existing:
+            resolved_seq = existing[0].name
+            print(f"[INFO] Found existing sequence folder: '{resolved_seq}' ({len(list(existing[0].iterdir()))} files)")
+            if resolved_seq != target_seq and not seq_path.exists():
+                try:
+                    seq_path.symlink_to(resolved_seq, target_is_directory=True)
+                    print(f"[INFO] Created symlink: {seq_path} -> {resolved_seq}")
+                except Exception:
+                    pass
+            target_seq = resolved_seq
+            seq_path = split_dir / target_seq
+
+    if not seq_path.exists() or not any(seq_path.iterdir() if seq_path.is_dir() else []):
+        print(f"[INFO] Sequence '{target_seq}' not found locally at '{seq_path}'.")
         print(f"[INFO] Initiating automated download of SoccerNetGS {args.split} split...")
         try:
             import SoccerNet
@@ -259,10 +281,12 @@ def main() -> int:
         zip_file = next((p for p in possible_zips if p.exists()), None)
         if zip_file and zip_file.exists():
             import zipfile
-            print(f"[INFO] Extracting strictly sequence '{args.sequence_id}' from {zip_file.name} (~150MB)...")
-            (data_dir / args.split).mkdir(parents=True, exist_ok=True)
+            target_names = [target_seq, f"{target_seq}0", f"{target_seq[:5]}0{target_seq[5:]}" if len(target_seq) == 7 else target_seq]
             with zipfile.ZipFile(zip_file, "r") as z:
-                members = [m for m in z.namelist() if args.sequence_id in m]
+                members = [m for m in z.namelist() if any(f"{t}/" in m or f"/{t}/" in m for t in target_names) or (m.startswith(f"{args.split}/") and m.count("/") == 1)]
+                if not members:
+                    members = [m for m in z.namelist() if any(t in m for t in target_names)]
+                print(f"[INFO] Extracting {len(members)} files for sequence '{target_seq}'...")
                 for m in members:
                     if m.startswith(f"{args.split}/"):
                         z.extract(m, str(data_dir))
@@ -277,10 +301,16 @@ def main() -> int:
                 pass
 
         if not seq_path.exists():
-            found = list(data_dir.glob(f"**/{args.sequence_id}"))
-            if found:
-                (data_dir / args.split).mkdir(parents=True, exist_ok=True)
-                shutil.move(str(found[0]), str(seq_path))
+            existing = sorted([p for p in split_dir.glob(f"{target_seq}*") if p.is_dir() and any(p.iterdir())])
+            if existing:
+                resolved_seq = existing[0].name
+                if resolved_seq != target_seq and not seq_path.exists():
+                    try:
+                        seq_path.symlink_to(resolved_seq, target_is_directory=True)
+                    except Exception:
+                        pass
+                target_seq = resolved_seq
+                seq_path = split_dir / target_seq
 
         if not seq_path.exists() or not any(seq_path.iterdir() if seq_path.is_dir() else []):
             print(f"[ERROR] Sequence directory still not found after download: '{seq_path}'.", file=sys.stderr)
@@ -290,7 +320,7 @@ def main() -> int:
     # 4. Execute inference
     return execute_one_sequence(
         gsr_dir=gsr_dir,
-        sequence_id=args.sequence_id,
+        sequence_id=target_seq,
         split=args.split,
         config_name="soccernet",
         data_dir=data_dir,
