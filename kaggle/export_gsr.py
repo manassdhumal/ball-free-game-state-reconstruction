@@ -271,6 +271,11 @@ def export_gsr_package(
         if isinstance(raw_data, list):
             raw_df = pd.DataFrame(raw_data)
         elif isinstance(raw_data, dict):
+            if any(k in raw_data for k in ("run_manifest", "dataset_name", "git_commit", "system")):
+                raise ValueError(
+                    f"Selected file '{raw_output_path}' is a manifest/environment file, not TrackLab predictions. "
+                    "Inference did not finish successfully. Please check results/gsr_kaggle/logs/ for details."
+                )
             if "predictions" in raw_data:
                 preds = raw_data["predictions"]
                 if isinstance(preds, list):
