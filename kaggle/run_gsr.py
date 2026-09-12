@@ -102,10 +102,15 @@ def execute_one_sequence(
     """Executes the official TrackLab GSR baseline for exactly one sequence."""
     logs_dir = output_dir / "logs"
     logs_dir.mkdir(parents=True, exist_ok=True)
-    log_file = logs_dir / f"inference_{sequence_id}.log"
-
-    venv_tracklab = gsr_dir / ".venv" / "bin" / "tracklab"
-    tracklab_bin = str(venv_tracklab) if venv_tracklab.exists() else (shutil.which("tracklab") or "tracklab")
+    venv_tracklab = (gsr_dir / ".venv" / "bin" / "tracklab").resolve()
+    if venv_tracklab.exists():
+        try:
+            venv_tracklab.chmod(0o755)
+        except Exception:
+            pass
+        tracklab_bin = str(venv_tracklab)
+    else:
+        tracklab_bin = shutil.which("tracklab") or "tracklab"
 
     # Ensure data directory symlink inside gsr_dir so all relative lookups work
     if data_dir:
@@ -145,7 +150,7 @@ def execute_one_sequence(
 
         proc = subprocess.Popen(
             cmd,
-            cwd=str(gsr_dir) if gsr_dir.exists() else None,
+            cwd=str(gsr_dir.resolve()) if gsr_dir.exists() else None,
             env=env,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
@@ -235,7 +240,7 @@ def main() -> int:
         return 0
 
     # 2. Check if GSR directory / tracklab exists
-    venv_tracklab = gsr_dir / ".venv" / "bin" / "tracklab"
+    venv_tracklab = (gsr_dir / ".venv" / "bin" / "tracklab").resolve()
     if not venv_tracklab.exists() and not shutil.which("tracklab"):
         print(f"[ERROR] TrackLab executable not found at '{venv_tracklab}'. Run kaggle/setup_gsr.py first.", file=sys.stderr)
         return 1
