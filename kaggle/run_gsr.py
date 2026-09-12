@@ -209,11 +209,55 @@ def main() -> int:
         print(f"[ERROR] TrackLab executable not found at '{venv_tracklab}'. Run kaggle/setup_gsr.py first.", file=sys.stderr)
         return 1
 
-    # 3. Check if sequence data exists
+    # 3. Check if sequence data exists, or automatically download it
     seq_path = data_dir / args.split / args.sequence_id
-    if not seq_path.exists():
-        print(f"[ERROR] Sequence directory not found: '{seq_path}'. Verify dataset download.", file=sys.stderr)
-        return 2
+    if not seq_path.exists() or not any(seq_path.iterdir() if seq_path.is_dir() else []):
+        print(f"[INFO] Sequence '{args.sequence_id}' not found locally at '{seq_path}'.")
+        print(f"[INFO] Initiating automated download of SoccerNetGS {args.split} split...")
+        try:
+            import SoccerNet
+        except ImportError:
+            subprocess.run([sys.executable, "-m", "pip", "install", "-q", "SoccerNet"], check=True)
+            import SoccerNet
+
+        from SoccerNet.Downloader import SoccerNetDownloader
+        downloader = SoccerNetDownloader(LocalDirectory=str(data_dir))
+        downloader.downloadDataTask(task="gamestate-2024", split=[args.split])
+
+        possible_zips = [
+            data_dir / "gamestate-2024" / f"{args.split}.zip",
+            data_dir / f"{args.split}.zip",
+        ]
+        zip_file = next((p for p in possible_zips if p.exists()), None)
+        if zip_file and zip_file.exists():
+            import zipfile
+            print(f"[INFO] Extracting strictly sequence '{args.sequence_id}' from {zip_file.name} (~150MB)...")
+            (data_dir / args.split).mkdir(parents=True, exist_ok=True)
+            with zipfile.ZipFile(zip_file, "r") as z:
+                members = [m for m in z.namelist() if args.sequence_id in m]
+                for m in members:
+                    if m.startswith(f"{args.split}/"):
+                        z.extract(m, str(data_dir))
+                    else:
+                        z.extract(m, str(data_dir / args.split))
+            print(f"[INFO] Deleting {zip_file.name} to preserve multi-gigabyte disk space...")
+            try:
+                os.remove(zip_file)
+                if zip_file.parent.name == "gamestate-2024":
+                    shutil.rmtree(zip_file.parent, ignore_errors=True)
+            except Exception:
+                pass
+
+        if not seq_path.exists():
+            found = list(data_dir.glob(f"**/{args.sequence_id}"))
+            if found:
+                (data_dir / args.split).mkdir(parents=True, exist_ok=True)
+                shutil.move(str(found[0]), str(seq_path))
+
+        if not seq_path.exists() or not any(seq_path.iterdir() if seq_path.is_dir() else []):
+            print(f"[ERROR] Sequence directory still not found after download: '{seq_path}'.", file=sys.stderr)
+            return 2
+        print(f"[INFO] Successfully verified sequence data at: {seq_path}")
 
     # 4. Execute inference
     return execute_one_sequence(
