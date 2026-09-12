@@ -132,7 +132,9 @@ def convert_raw_tracklab_to_canonical(
     team_col = "team" if "team" in raw_df.columns else "team_id"
     x_col = "pitch_x" if "pitch_x" in raw_df.columns else ("x" if "x" in raw_df.columns else "x_bottom_middle")
     y_col = "pitch_y" if "pitch_y" in raw_df.columns else ("y" if "y" in raw_df.columns else "y_bottom_middle")
-    conf_col = "confidence" if "confidence" in raw_df.columns else ("detection_confidence" if "detection_confidence" in raw_df.columns else "score")
+    
+    conf_candidates = ["confidence", "detection_confidence", "bbox_confidence", "conf", "score", "det_score", "track_confidence"]
+    conf_col = next((c for c in conf_candidates if c in raw_df.columns), None)
 
     default_team_map = {
         "0": "home", "home": "home", "team_0": "home", "team_left": "home", "left": "home",
@@ -141,64 +143,90 @@ def convert_raw_tracklab_to_canonical(
     }
     mapping = team_mapping or default_team_map
 
+    # Check if frame numbers are raw encoded image filenames (e.g., 2040000001)
+    raw_frames = pd.to_numeric(raw_df[frame_col], errors="coerce").dropna().astype(int)
+    min_frame_val = raw_frames.min() if not raw_frames.empty else 1
+    is_encoded_frame = min_frame_val > 100000
+
     for idx, r in raw_df.iterrows():
-        f_val = int(r[frame_col])
+        raw_f = int(r[frame_col])
+        if is_encoded_frame:
+            f_val = raw_f - min_frame_val + 1
+            ts_val = round((f_val - 1) / fps, 4)
+        else:
+            f_val = raw_f
+            ts_val = round(float(f_val) / fps, 4)
+
         pid_raw = r[track_col]
         pid_str = str(int(pid_raw)) if isinstance(pid_raw, (int, float, np.integer, np.floating)) and not pd.isna(pid_raw) else str(pid_raw)
 
-        # Team mapping with explicit validation and graceful role fallback
+        # Team mapping with robust handling of integer and float representations (0.0 / 1.0)
         raw_role = str(r.get("role", "")).lower().strip() if "role" in r and not pd.isna(r["role"]) else ""
         if team_col in r and not pd.isna(r[team_col]):
-            raw_team_key = str(r[team_col]).lower().strip()
+            val = r[team_col]
+            try:
+                raw_team_key = str(int(float(val)))
+            except (ValueError, TypeError):
+                raw_team_key = str(val).lower().strip()
+
             if raw_team_key in mapping:
                 team_val = mapping[raw_team_key]
-            elif "away" in raw_team_key or "1" == raw_team_key:
+            elif "1" in raw_team_key or "away" in raw_team_key or "right" in raw_team_key:
                 team_val = "away"
-            elif "ref" in raw_team_key or "2" == raw_team_key:
-                team_val = "referee"
-            elif "home" in raw_team_key or "0" == raw_team_key:
+            elif "0" in raw_team_key or "home" in raw_team_key or "left" in raw_team_key:
                 team_val = "home"
+            elif "2" in raw_team_key or "ref" in raw_team_key:
+                team_val = "referee"
             elif "ref" in raw_role:
                 team_val = "referee"
             else:
-                team_val = "home"  # Bounded fallback for unassigned player
+                team_val = "home"
         elif "ref" in raw_role:
             team_val = "referee"
         else:
             team_val = "home"
 
-        # Coordinates
-        raw_x = r[x_col] if x_col in r and not pd.isna(r[x_col]) else np.nan
-        raw_y = r[y_col] if y_col in r and not pd.isna(r[y_col]) else np.nan
+        # Coordinates with outlier rejection
+        raw_x = float(r[x_col]) if x_col in r and not pd.isna(r[x_col]) else np.nan
+        raw_y = float(r[y_col]) if y_col in r and not pd.isna(r[y_col]) else np.nan
 
         if not np.isnan(raw_x) and not np.isnan(raw_y):
             if normalize_coords:
                 # If metric pitch coordinates centered at (0, 0): [-L/2, +L/2] -> [0, 1]
-                if raw_x < 0 or raw_x > 1.0 or raw_y < 0 or raw_y > 1.0:
-                    norm_x = (float(raw_x) + pitch_length / 2.0) / pitch_length
-                    norm_y = (float(raw_y) + pitch_width / 2.0) / pitch_width
+                if abs(raw_x) > 1.5 or abs(raw_y) > 1.5:
+                    norm_x = (raw_x + pitch_length / 2.0) / pitch_length
+                    norm_y = (raw_y + pitch_width / 2.0) / pitch_width
                 else:
-                    norm_x = float(raw_x)
-                    norm_y = float(raw_y)
+                    norm_x = raw_x
+                    norm_y = raw_y
             else:
-                norm_x = float(raw_x)
-                norm_y = float(raw_y)
+                norm_x = raw_x
+                norm_y = raw_y
+
+            # Guard against homography calibration divergence (e.g. extreme values like -133)
+            if norm_x < -0.15 or norm_x > 1.15 or norm_y < -0.15 or norm_y > 1.15:
+                norm_x = np.nan
+                norm_y = np.nan
+                visible = False
+            else:
+                norm_x = round(max(0.0, min(1.0, float(norm_x))), 6)
+                norm_y = round(max(0.0, min(1.0, float(norm_y))), 6)
+                visible = True
         else:
             norm_x = np.nan
             norm_y = np.nan
+            visible = False
 
-        # Confidence: clamp valid scores; do not invent 1.0 if genuinely absent
-        if conf_col in r and not pd.isna(r[conf_col]):
-            conf_clamped = max(0.0, min(1.0, float(r[conf_col])))
+        # Confidence: clamp valid scores; default to 1.0 for detected tracklets if uncalibrated
+        if conf_col and conf_col in r and not pd.isna(r[conf_col]) and float(r[conf_col]) > 0:
+            conf_clamped = round(max(0.0, min(1.0, float(r[conf_col]))), 4)
         else:
-            conf_clamped = 0.0  # Uncalibrated / absent confidence proxy
-
-        visible = not np.isnan(norm_x) and not np.isnan(norm_y) and conf_clamped > 0.1
+            conf_clamped = 1.0 if visible else 0.0
 
         rows.append({
             "match_id": match_id,
             "frame": f_val,
-            "timestamp": round(float(f_val) / fps, 4),
+            "timestamp": ts_val,
             "player_id": pid_str,
             "team": team_val,
             "x": norm_x,
@@ -209,6 +237,7 @@ def convert_raw_tracklab_to_canonical(
 
     canonical_df = pd.DataFrame(rows)[CANONICAL_COLUMNS]
     canonical_df = canonical_df.drop_duplicates(subset=["match_id", "frame", "player_id"])
+    canonical_df = canonical_df.sort_values(by=["frame", "player_id"]).reset_index(drop=True)
     validate_canonical_dataframe(canonical_df)
     return canonical_df
 
