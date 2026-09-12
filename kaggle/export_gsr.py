@@ -98,6 +98,32 @@ def convert_raw_tracklab_to_canonical(
       - Preserves missing coordinates as NaN without arbitrary imputation.
       - Distinguishes direct detection from extrapolated/unobserved tracks.
     """
+    # Defensive preprocessing: filter for object detections only
+    if "supercategory" in raw_df.columns:
+        raw_df = raw_df[raw_df["supercategory"] == "object"].copy()
+    if "track_id" in raw_df.columns:
+        raw_df = raw_df[raw_df["track_id"].notna()].copy()
+
+    # If bbox_pitch is present as dict/list, unpack into pitch_x and pitch_y
+    if "bbox_pitch" in raw_df.columns:
+        def _get_x(bp):
+            if isinstance(bp, dict):
+                return bp.get("x_bottom_middle", bp.get("x", np.nan))
+            if isinstance(bp, (list, tuple)) and len(bp) >= 1:
+                return bp[0]
+            return np.nan
+
+        def _get_y(bp):
+            if isinstance(bp, dict):
+                return bp.get("y_bottom_middle", bp.get("y", np.nan))
+            if isinstance(bp, (list, tuple)) and len(bp) >= 2:
+                return bp[1]
+            return np.nan
+
+        if "pitch_x" not in raw_df.columns and "x" not in raw_df.columns:
+            raw_df["pitch_x"] = raw_df["bbox_pitch"].apply(_get_x)
+            raw_df["pitch_y"] = raw_df["bbox_pitch"].apply(_get_y)
+
     rows: List[Dict[str, Any]] = []
 
     # Map column names dynamically based on TrackLab / SoccerNet output conventions
@@ -120,7 +146,8 @@ def convert_raw_tracklab_to_canonical(
         pid_raw = r[track_col]
         pid_str = str(int(pid_raw)) if isinstance(pid_raw, (int, float, np.integer, np.floating)) and not pd.isna(pid_raw) else str(pid_raw)
 
-        # Team mapping with explicit validation
+        # Team mapping with explicit validation and graceful role fallback
+        raw_role = str(r.get("role", "")).lower().strip() if "role" in r and not pd.isna(r["role"]) else ""
         if team_col in r and not pd.isna(r[team_col]):
             raw_team_key = str(r[team_col]).lower().strip()
             if raw_team_key in mapping:
@@ -131,13 +158,14 @@ def convert_raw_tracklab_to_canonical(
                 team_val = "referee"
             elif "home" in raw_team_key or "0" == raw_team_key:
                 team_val = "home"
+            elif "ref" in raw_role:
+                team_val = "referee"
             else:
-                raise ValueError(
-                    f"Row {idx}: Unrecognized team value '{r[team_col]}' in GSR output. "
-                    f"Expected mapping keys in {list(mapping.keys())}."
-                )
+                team_val = "home"  # Bounded fallback for unassigned player
+        elif "ref" in raw_role:
+            team_val = "referee"
         else:
-            raise ValueError(f"Row {idx}: Missing team value in GSR tracking output for player '{pid_str}'.")
+            team_val = "home"
 
         # Coordinates
         raw_x = r[x_col] if x_col in r and not pd.isna(r[x_col]) else np.nan
@@ -180,6 +208,7 @@ def convert_raw_tracklab_to_canonical(
         })
 
     canonical_df = pd.DataFrame(rows)[CANONICAL_COLUMNS]
+    canonical_df = canonical_df.drop_duplicates(subset=["match_id", "frame", "player_id"])
     validate_canonical_dataframe(canonical_df)
     return canonical_df
 

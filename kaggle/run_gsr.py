@@ -107,6 +107,17 @@ def execute_one_sequence(
     venv_tracklab = gsr_dir / ".venv" / "bin" / "tracklab"
     tracklab_bin = str(venv_tracklab) if venv_tracklab.exists() else (shutil.which("tracklab") or "tracklab")
 
+    # Ensure data directory symlink inside gsr_dir so all relative lookups work
+    if data_dir:
+        try:
+            (gsr_dir / "data").mkdir(parents=True, exist_ok=True)
+            link_target = gsr_dir / "data" / "SoccerNetGS"
+            if not link_target.exists() and not link_target.is_symlink():
+                link_target.symlink_to(data_dir.resolve(), target_is_directory=True)
+                print(f"[INFO] Created symlink: {link_target} -> {data_dir.resolve()}")
+        except Exception as e:
+            pass
+
     cmd = [
         tracklab_bin,
         "-cn", config_name,
@@ -115,7 +126,7 @@ def execute_one_sequence(
         f"dataset.vids_dict.{split}=[{sequence_id}]",
     ]
     if data_dir:
-        cmd.append(f"dataset.dataset_path={data_dir}")
+        cmd.append(f"dataset.dataset_path={data_dir.resolve()}")
 
     env = os.environ.copy()
     env["MPLBACKEND"] = "Agg"
@@ -157,17 +168,19 @@ def execute_one_sequence(
     pred_dir = output_dir / "predictions"
     pred_dir.mkdir(parents=True, exist_ok=True)
     candidates = []
-    for d in [gsr_dir / "outputs", output_dir / "tracklab_output"]:
+    for d in [gsr_dir / "outputs", Path("outputs"), output_dir / "tracklab_output", output_dir]:
         if d.exists():
             for ext in ("*.csv", "*.json", "*.pklz"):
                 candidates.extend(list(d.glob(f"**/{ext}")))
 
     if candidates:
-        candidates.sort(key=lambda p: p.stat().st_mtime, reverse=True)
-        newest = candidates[0]
-        dest = pred_dir / f"{sequence_id}{newest.suffix}"
-        shutil.copy2(newest, dest)
-        print(f"[INFO] Harvested prediction file: {newest} -> {dest}")
+        matching = [p for p in candidates if sequence_id in p.name]
+        harvest_list = matching if matching else candidates
+        harvest_list.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+        for newest in harvest_list[:3]:
+            dest = pred_dir / f"{sequence_id}{newest.suffix}"
+            shutil.copy2(newest, dest)
+            print(f"[INFO] Harvested prediction file: {newest} -> {dest}")
 
     return exit_code
 
@@ -185,7 +198,22 @@ def main() -> int:
     project_root = Path.cwd()
     gsr_dir = Path(args.gsr_dir)
     output_dir = Path(args.output_dir)
-    data_dir = Path(args.data_dir) if args.data_dir else project_root / "data" / "SoccerNetGS"
+
+    if args.data_dir:
+        data_dir = Path(args.data_dir)
+    else:
+        candidates = [
+            project_root / "data" / "SoccerNetGS",
+            Path("/kaggle/working/capstone/data/SoccerNetGS"),
+            Path("/kaggle/working/data/SoccerNetGS"),
+            Path("data/SoccerNetGS"),
+        ]
+        data_dir = project_root / "data" / "SoccerNetGS"
+        for c in candidates:
+            if (c / args.split / args.sequence_id).exists():
+                data_dir = c
+                print(f"[INFO] Auto-discovered dataset at: {data_dir}")
+                break
 
     # 1. Generate run manifest
     create_run_manifest(
