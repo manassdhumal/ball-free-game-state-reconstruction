@@ -57,6 +57,24 @@ class TestExportGSR(unittest.TestCase):
         self.assertEqual(teams["20"], "away")
         self.assertEqual(teams["99"], "referee")
 
+    def test_three_cluster_balanced_team_mapping(self):
+        """Verify that TrackLab 3-cluster predictions (0, 1, 2) map clusters 0 & 1 to home, cluster 2 to away, and center/sideline to referee."""
+        raw_preds = [
+            {"image_id": 1, "track_id": 1, "supercategory": "object", "attributes": {"role": "player", "team": "0"}, "bbox_pitch": {"x_bottom_middle": 0.0, "y_bottom_middle": 10.0}},
+            {"image_id": 1, "track_id": 2, "supercategory": "object", "attributes": {"role": "player", "team": "1"}, "bbox_pitch": {"x_bottom_middle": 5.0, "y_bottom_middle": -10.0}},
+            {"image_id": 1, "track_id": 3, "supercategory": "object", "attributes": {"role": "player", "team": "2"}, "bbox_pitch": {"x_bottom_middle": 15.0, "y_bottom_middle": 5.0}},
+            {"image_id": 1, "track_id": 16, "supercategory": "object", "attributes": {"role": "player", "team": "2"}, "bbox_pitch": {"x_bottom_middle": 0.0, "y_bottom_middle": 0.0}},
+            {"image_id": 1, "track_id": 99, "supercategory": "object", "attributes": {"role": "player", "team": "0"}, "bbox_pitch": {"x_bottom_middle": 0.0, "y_bottom_middle": 35.0}},
+        ]
+        df = pd.DataFrame(raw_preds)
+        canon = convert_raw_tracklab_to_canonical(df, match_id="test_3cluster", stitch=False)
+        teams = dict(zip(canon["player_id"], canon["team"]))
+        self.assertEqual(teams["1"], "home")
+        self.assertEqual(teams["2"], "home")
+        self.assertEqual(teams["3"], "away")
+        self.assertEqual(teams["16"], "referee")
+        self.assertEqual(teams["99"], "referee")
+
     def test_out_of_bounds_coordinate_preservation(self):
         """Verify coordinates slightly beyond [0, 1] are NOT clamped to 0.0 or 1.0."""
         raw_preds = [

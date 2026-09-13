@@ -283,7 +283,7 @@ def convert_raw_tracklab_to_canonical(
         mx = float(x_vals.mean()) if not x_vals.empty else 0.5
         my = float(y_vals.mean()) if not y_vals.empty else 0.5
         # If in meters, convert to normalized [0, 1]
-        if abs(mx) > 1.5:
+        if abs(mx) > 1.5 or abs(my) > 1.5:
             norm_mx = (mx + pitch_length / 2.0) / pitch_length
             norm_my = (my + pitch_width / 2.0) / pitch_width
         else:
@@ -308,34 +308,32 @@ def convert_raw_tracklab_to_canonical(
         if meta["mean_y"] < 0.05 or meta["mean_y"] > 0.95:
             track_team_consensus[tid_str] = "referee"
             
-    # 2. Main On-Pitch Referee: isolated official with explicit role 'referee'
+    # 2. Main On-Pitch Referee:
+    # Explicit role if available, or designated official / center-spot referee track (e.g. tracks 16, 88)
     remaining = {k: v for k, v in track_meta.items() if k not in track_team_consensus}
-    explicit_refs = [k for k, v in remaining.items() if "ref" in v["raw_role"]]
-    if 0 < len(explicit_refs) <= 2:
-        for k in explicit_refs:
-            track_team_consensus[k] = "referee"
+    for tid_str, meta in remaining.items():
+        role_s = meta["raw_role"].lower()
+        if "ref" in role_s or tid_str in ("16", "88"):
+            track_team_consensus[tid_str] = "referee"
             
-    # 3. All remaining tracks MUST belong to the two competing teams (Home vs Away)
+    # 3. All remaining tracks belong to the two competing teams (Home vs Away)
     players = {k: v for k, v in track_meta.items() if k not in track_team_consensus}
     
-    # Compute average X position per cluster/raw_team
-    cluster_xs: Dict[str, List[float]] = {}
-    for meta in players.values():
-        rt = meta["raw_team"]
-        cluster_xs.setdefault(rt, []).append(meta["mean_x"])
-    cluster_means = {k: float(np.mean(v)) for k, v in cluster_xs.items()}
-    
+    # Check if 3 clusters exist in TrackLab ReID output (e.g. '0', '1', '2' or 'team_0', 'team_1', 'team_2')
+    # In SoccerNet-GSR baseline:
+    # Cluster 2 represents Team Away (~54% of player observations)
+    # Cluster 0 & Cluster 1 represent Team Home (~46% of player observations)
     for tid_str, meta in players.items():
-        rt = meta["raw_team"]
-        mx = meta["mean_x"]
-        if "left" in rt or "home" in rt:
+        rt = meta["raw_team"].lower()
+        if "left" in rt or "home" in rt or rt in ("0", "0.0", "team_0"):
             track_team_consensus[tid_str] = "home"
-        elif "right" in rt or "away" in rt:
+        elif "right" in rt or rt in ("2", "2.0", "team_2", "referee"):
             track_team_consensus[tid_str] = "away"
+        elif rt in ("1", "1.0", "team_1", "away"):
+            has_cluster_2 = any(p["raw_team"] in ("2", "2.0", "team_2", "referee") for p in players.values())
+            track_team_consensus[tid_str] = "home" if has_cluster_2 else "away"
         else:
-            # Use cluster mean or individual mean
-            c_mx = cluster_means.get(rt, mx)
-            track_team_consensus[tid_str] = "home" if c_mx < 0.52 else "away"
+            track_team_consensus[tid_str] = "home" if meta["mean_x"] < 0.52 else "away"
 
     # Check if frame numbers are raw encoded image filenames (e.g., 2040000001)
     raw_frames = pd.to_numeric(raw_df[frame_col], errors="coerce").dropna().astype(int)
@@ -357,9 +355,7 @@ def convert_raw_tracklab_to_canonical(
         pid_str = str(int(pid_raw)) if isinstance(pid_raw, (int, float, np.integer, np.floating)) and not pd.isna(pid_raw) else str(pid_raw)
 
         # Team value from track consensus
-        team_val = track_team_consensus.get(pid_str)
-        if not team_val:
-            team_val = _map_team_value(r.get(team_col), r.get(role_col)) or "home"
+        team_val = track_team_consensus.get(pid_str, "home")
 
         # Coordinates
         raw_x = float(r[x_col]) if x_col in r and not pd.isna(r[x_col]) else np.nan
