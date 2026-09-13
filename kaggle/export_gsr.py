@@ -81,6 +81,118 @@ def validate_canonical_dataframe(df: pd.DataFrame) -> None:
         raise ValueError(f"Found {dups.sum()} duplicate player entries per frame.")
 
 
+def stitch_tracklets(
+    df: pd.DataFrame,
+    fps: float = 25.0,
+    max_gap_frames: int = 75,
+    max_speed_mps: float = 9.5,
+    min_track_len: int = 3,
+) -> pd.DataFrame:
+    """
+    Consolidates fragmented tracklets belonging to the same player entity.
+
+    Rules:
+      1. Merges non-overlapping tracklets of the same team if:
+         a) Jersey numbers match (MMOCR high-confidence link).
+         b) Implied spatial velocity <= max_speed_mps (physical sprinting bound).
+      2. Re-maps player_ids to stable unified identifiers.
+      3. Filters short transient flickers (< min_track_len) that could not be linked.
+    """
+    if df.empty:
+        return df
+
+    tracks: Dict[str, Dict[str, Any]] = {}
+    for pid, g in df.groupby("player_id"):
+        valid_coords = g.dropna(subset=["x", "y"])
+        if valid_coords.empty:
+            continue
+        first_row = valid_coords.iloc[0]
+        last_row = valid_coords.iloc[-1]
+        team_val = g["team"].mode().iloc[0] if not g["team"].empty else "home"
+        jersey_val = None
+        if "jersey" in g.columns:
+            non_null_j = g["jersey"].dropna()
+            if not non_null_j.empty:
+                jersey_val = str(non_null_j.mode().iloc[0])
+
+        tracks[str(pid)] = {
+            "pid": str(pid),
+            "start_frame": int(g["frame"].min()),
+            "end_frame": int(g["frame"].max()),
+            "start_x": float(first_row["x"]),
+            "start_y": float(first_row["y"]),
+            "end_x": float(last_row["x"]),
+            "end_y": float(last_row["y"]),
+            "team": team_val,
+            "jersey": jersey_val,
+            "count": len(g),
+        }
+
+    # Greedily link tracklets forward in time
+    mapping: Dict[str, str] = {pid: pid for pid in tracks}
+    sorted_pids = sorted(tracks.keys(), key=lambda p: tracks[p]["start_frame"])
+
+    for i, p1 in enumerate(sorted_pids):
+        t1_pid = mapping[p1]
+        t1 = tracks[t1_pid]
+        best_match = None
+        best_cost = float("inf")
+
+        for p2 in sorted_pids[i + 1:]:
+            t2_pid = mapping[p2]
+            if t1_pid == t2_pid:
+                continue
+            t2 = tracks[t2_pid]
+            # Must not overlap in time
+            if t1["end_frame"] >= t2["start_frame"]:
+                continue
+            gap = t2["start_frame"] - t1["end_frame"]
+            if gap > max_gap_frames:
+                continue
+            # Must be same team
+            if t1["team"] != t2["team"]:
+                continue
+
+            jersey_match = (
+                t1["jersey"] is not None
+                and t2["jersey"] is not None
+                and t1["jersey"] == t2["jersey"]
+            )
+
+            dx = (t2["start_x"] - t1["end_x"]) * 105.0
+            dy = (t2["start_y"] - t1["end_y"]) * 68.0
+            dist = np.sqrt(dx**2 + dy**2)
+            dt = gap / fps
+            speed = dist / max(dt, 0.04)
+
+            if jersey_match or speed <= max_speed_mps:
+                cost = dist * 0.2 if jersey_match else dist
+                if cost < best_cost:
+                    best_cost = cost
+                    best_match = p2
+
+        if best_match:
+            target_pid = mapping[p1]
+            source_pid = mapping[best_match]
+            for k, v in mapping.items():
+                if v == source_pid:
+                    mapping[k] = target_pid
+            tracks[target_pid]["end_frame"] = max(tracks[target_pid]["end_frame"], tracks[source_pid]["end_frame"])
+            tracks[target_pid]["end_x"] = tracks[source_pid]["end_x"]
+            tracks[target_pid]["end_y"] = tracks[source_pid]["end_y"]
+
+    df_stitched = df.copy()
+    df_stitched["player_id"] = df_stitched["player_id"].astype(str).map(mapping).fillna(df_stitched["player_id"])
+
+    # Filter out unlinked short transient flickers (< min_track_len)
+    if min_track_len > 1:
+        stitched_counts = df_stitched["player_id"].value_counts()
+        keep_pids = set(stitched_counts[stitched_counts >= min_track_len].index)
+        df_stitched = df_stitched[df_stitched["player_id"].isin(keep_pids)].copy()
+
+    return df_stitched.reset_index(drop=True)
+
+
 def convert_raw_tracklab_to_canonical(
     raw_df: pd.DataFrame,
     match_id: str,
@@ -89,20 +201,41 @@ def convert_raw_tracklab_to_canonical(
     pitch_length: float = 105.0,
     pitch_width: float = 68.0,
     team_mapping: Optional[Dict[str, str]] = None,
+    stitch: bool = True,
+    max_gap_frames: int = 75,
+    max_speed_mps: float = 9.5,
+    min_track_len: int = 3,
+    filter_referees: bool = False,
 ) -> pd.DataFrame:
     """
     Converts raw TrackLab prediction DataFrame to canonical tracking DataFrame.
 
     Avoids silent fallbacks:
-      - Validates and maps team names explicitly; raises ValueError if unmapped.
-      - Preserves missing coordinates as NaN without arbitrary imputation.
-      - Distinguishes direct detection from extrapolated/unobserved tracks.
+      - Unpacks nested 'attributes' (team, role, jersey) so teams and referees are detected.
+      - Resolves team labels using track-level majority voting and pitch half.
+      - Preserves natural out-of-bounds player positions without artificial clamping to 0.0 or 1.0.
+      - Discards true homography calibration singularities (|norm| > 1.20) as NaN (visible=False).
+      - Consolidates fragmented tracklets and suppresses short transient detection flickers.
     """
     # Defensive preprocessing: filter for object detections only
     if "supercategory" in raw_df.columns:
         raw_df = raw_df[raw_df["supercategory"] == "object"].copy()
     if "track_id" in raw_df.columns:
         raw_df = raw_df[raw_df["track_id"].notna()].copy()
+
+    # Unpack nested attributes (role, team, jersey, confidence) if present
+    if "attributes" in raw_df.columns:
+        def _get_attr(attr_val, key):
+            if isinstance(attr_val, dict):
+                return attr_val.get(key)
+            return None
+
+        for col in ("team", "role", "jersey", "confidence"):
+            extracted = raw_df["attributes"].apply(lambda a: _get_attr(a, col))
+            if col not in raw_df.columns or raw_df[col].isna().all():
+                raw_df[col] = extracted
+            else:
+                raw_df[col] = raw_df[col].fillna(extracted)
 
     # If bbox_pitch is present as dict/list, unpack into pitch_x and pitch_y
     if "bbox_pitch" in raw_df.columns:
@@ -124,12 +257,12 @@ def convert_raw_tracklab_to_canonical(
             raw_df["pitch_x"] = raw_df["bbox_pitch"].apply(_get_x)
             raw_df["pitch_y"] = raw_df["bbox_pitch"].apply(_get_y)
 
-    rows: List[Dict[str, Any]] = []
-
     # Map column names dynamically based on TrackLab / SoccerNet output conventions
     frame_col = "frame" if "frame" in raw_df.columns else ("image_id" if "image_id" in raw_df.columns else "frame_idx")
     track_col = "track_id" if "track_id" in raw_df.columns else ("player_id" if "player_id" in raw_df.columns else "id")
     team_col = "team" if "team" in raw_df.columns else "team_id"
+    role_col = "role" if "role" in raw_df.columns else "role_id"
+    jersey_col = "jersey" if "jersey" in raw_df.columns else "jersey_number"
     x_col = "pitch_x" if "pitch_x" in raw_df.columns else ("x" if "x" in raw_df.columns else "x_bottom_middle")
     y_col = "pitch_y" if "pitch_y" in raw_df.columns else ("y" if "y" in raw_df.columns else "y_bottom_middle")
     
@@ -143,10 +276,53 @@ def convert_raw_tracklab_to_canonical(
     }
     mapping = team_mapping or default_team_map
 
+    def _map_team_value(val, role_val):
+        role_str = str(role_val or "").lower().strip()
+        if "ref" in role_str:
+            return "referee"
+        if val is None or pd.isna(val) or str(val).strip() == "" or str(val).lower() == "none":
+            return None
+        try:
+            key = str(int(float(val)))
+        except (ValueError, TypeError):
+            key = str(val).lower().strip()
+        if key in mapping:
+            return mapping[key]
+        if "away" in key or "right" in key or "1" in key:
+            return "away"
+        if "home" in key or "left" in key or "0" in key:
+            return "home"
+        if "ref" in key or "2" in key:
+            return "referee"
+        return None
+
+    # Track-level consensus team mapping (players don't change teams mid-sequence)
+    track_team_consensus: Dict[str, str] = {}
+    for tid, group in raw_df.groupby(track_col):
+        tid_str = str(int(tid)) if isinstance(tid, (int, float, np.integer, np.floating)) and not pd.isna(tid) else str(tid)
+        t_vals = group[team_col] if team_col in group.columns else [None] * len(group)
+        r_vals = group[role_col] if role_col in group.columns else [None] * len(group)
+        mapped = [_map_team_value(tv, rv) for tv, rv in zip(t_vals, r_vals)]
+        valid = [m for m in mapped if m is not None]
+        if valid:
+            track_team_consensus[tid_str] = pd.Series(valid).mode().iloc[0]
+        else:
+            role_strs = [str(r).lower() for r in r_vals if pd.notna(r)]
+            if any("ref" in r for r in role_strs):
+                track_team_consensus[tid_str] = "referee"
+            else:
+                mean_x = group[x_col].mean() if x_col in group.columns and not group[x_col].isna().all() else 0.0
+                if abs(mean_x) > 1.5:
+                    track_team_consensus[tid_str] = "home" if mean_x < 0 else "away"
+                else:
+                    track_team_consensus[tid_str] = "home" if mean_x < 0.5 else "away"
+
     # Check if frame numbers are raw encoded image filenames (e.g., 2040000001)
     raw_frames = pd.to_numeric(raw_df[frame_col], errors="coerce").dropna().astype(int)
     min_frame_val = raw_frames.min() if not raw_frames.empty else 1
     is_encoded_frame = min_frame_val > 100000
+
+    rows: List[Dict[str, Any]] = []
 
     for idx, r in raw_df.iterrows():
         raw_f = int(r[frame_col])
@@ -160,39 +336,18 @@ def convert_raw_tracklab_to_canonical(
         pid_raw = r[track_col]
         pid_str = str(int(pid_raw)) if isinstance(pid_raw, (int, float, np.integer, np.floating)) and not pd.isna(pid_raw) else str(pid_raw)
 
-        # Team mapping with robust handling of integer and float representations (0.0 / 1.0)
-        raw_role = str(r.get("role", "")).lower().strip() if "role" in r and not pd.isna(r["role"]) else ""
-        if team_col in r and not pd.isna(r[team_col]):
-            val = r[team_col]
-            try:
-                raw_team_key = str(int(float(val)))
-            except (ValueError, TypeError):
-                raw_team_key = str(val).lower().strip()
+        # Team value from track consensus
+        team_val = track_team_consensus.get(pid_str)
+        if not team_val:
+            team_val = _map_team_value(r.get(team_col), r.get(role_col)) or "home"
 
-            if raw_team_key in mapping:
-                team_val = mapping[raw_team_key]
-            elif "1" in raw_team_key or "away" in raw_team_key or "right" in raw_team_key:
-                team_val = "away"
-            elif "0" in raw_team_key or "home" in raw_team_key or "left" in raw_team_key:
-                team_val = "home"
-            elif "2" in raw_team_key or "ref" in raw_team_key:
-                team_val = "referee"
-            elif "ref" in raw_role:
-                team_val = "referee"
-            else:
-                team_val = "home"
-        elif "ref" in raw_role:
-            team_val = "referee"
-        else:
-            team_val = "home"
-
-        # Coordinates with outlier rejection
+        # Coordinates
         raw_x = float(r[x_col]) if x_col in r and not pd.isna(r[x_col]) else np.nan
         raw_y = float(r[y_col]) if y_col in r and not pd.isna(r[y_col]) else np.nan
 
         if not np.isnan(raw_x) and not np.isnan(raw_y):
             if normalize_coords:
-                # If metric pitch coordinates centered at (0, 0): [-L/2, +L/2] -> [0, 1]
+                # Metric pitch coordinates centered at (0, 0): [-L/2, +L/2] -> [0, 1]
                 if abs(raw_x) > 1.5 or abs(raw_y) > 1.5:
                     norm_x = (raw_x + pitch_length / 2.0) / pitch_length
                     norm_y = (raw_y + pitch_width / 2.0) / pitch_width
@@ -203,14 +358,15 @@ def convert_raw_tracklab_to_canonical(
                 norm_x = raw_x
                 norm_y = raw_y
 
-            # Guard against homography calibration divergence (e.g. extreme values like -133)
-            if norm_x < -0.15 or norm_x > 1.15 or norm_y < -0.15 or norm_y > 1.15:
+            # Reject severe homography calibration divergence (e.g. extreme values like -133)
+            # Allow natural out-of-bounds positions without artificial wall clamping to 0.0 or 1.0
+            if norm_x < -0.20 or norm_x > 1.20 or norm_y < -0.20 or norm_y > 1.20:
                 norm_x = np.nan
                 norm_y = np.nan
                 visible = False
             else:
-                norm_x = round(max(0.0, min(1.0, float(norm_x))), 6)
-                norm_y = round(max(0.0, min(1.0, float(norm_y))), 6)
+                norm_x = round(float(norm_x), 6)
+                norm_y = round(float(norm_y), 6)
                 visible = True
         else:
             norm_x = np.nan
@@ -223,6 +379,8 @@ def convert_raw_tracklab_to_canonical(
         else:
             conf_clamped = 1.0 if visible else 0.0
 
+        jersey_val = str(r[jersey_col]) if jersey_col in r and pd.notna(r[jersey_col]) else None
+
         rows.append({
             "match_id": match_id,
             "frame": f_val,
@@ -233,11 +391,28 @@ def convert_raw_tracklab_to_canonical(
             "y": norm_y,
             "confidence": conf_clamped,
             "visible": visible,
+            "jersey": jersey_val,
         })
 
-    canonical_df = pd.DataFrame(rows)[CANONICAL_COLUMNS]
+    canonical_df = pd.DataFrame(rows)
+
+    # Stitch fragmented tracklets and remove short flickers
+    if stitch and not canonical_df.empty:
+        canonical_df = stitch_tracklets(
+            canonical_df,
+            fps=fps,
+            max_gap_frames=max_gap_frames,
+            max_speed_mps=max_speed_mps,
+            min_track_len=min_track_len,
+        )
+
+    # Optional referee filtering for player-only tracking
+    if filter_referees and not canonical_df.empty:
+        canonical_df = canonical_df[canonical_df["team"] != "referee"].copy()
+
     canonical_df = canonical_df.drop_duplicates(subset=["match_id", "frame", "player_id"])
     canonical_df = canonical_df.sort_values(by=["frame", "player_id"]).reset_index(drop=True)
+    canonical_df = canonical_df[CANONICAL_COLUMNS]
     validate_canonical_dataframe(canonical_df)
     return canonical_df
 
@@ -245,34 +420,41 @@ def convert_raw_tracklab_to_canonical(
 def compute_tracking_quality_metrics(df: pd.DataFrame) -> pd.DataFrame:
     """Computes comprehensive tracking quality metrics for the sequence."""
     total_obs = len(df)
-    total_frames = df["frame"].nunique()
-    unique_players = df["player_id"].nunique()
+    total_frames = df["frame"].nunique() if not df.empty else 0
+    unique_players = df["player_id"].nunique() if not df.empty else 0
 
-    track_lengths = df.groupby("player_id")["frame"].count()
+    track_lengths = df.groupby("player_id")["frame"].count() if not df.empty else pd.Series([], dtype=int)
     min_track = int(track_lengths.min()) if not track_lengths.empty else 0
     max_track = int(track_lengths.max()) if not track_lengths.empty else 0
     avg_track = float(track_lengths.mean()) if not track_lengths.empty else 0.0
 
-    missing_coords = df["x"].isna() | df["y"].isna()
+    missing_coords = df["x"].isna() | df["y"].isna() if not df.empty else pd.Series([], dtype=bool)
     missingness_rate = float(missing_coords.mean()) if total_obs > 0 else 0.0
     detected_rate = float(df["visible"].mean()) if total_obs > 0 else 0.0
     mean_conf = float(df["confidence"].mean()) if total_obs > 0 else 0.0
+
+    home_players = int(df[df["team"] == "home"]["player_id"].nunique()) if not df.empty else 0
+    away_players = int(df[df["team"] == "away"]["player_id"].nunique()) if not df.empty else 0
+    referees = int(df[df["team"] == "referee"]["player_id"].nunique()) if not df.empty else 0
 
     summary_data = [{
         "match_id": str(df["match_id"].iloc[0]) if not df.empty else "N/A",
         "total_frames": total_frames,
         "total_observations": total_obs,
         "unique_players": unique_players,
+        "home_players": home_players,
+        "away_players": away_players,
+        "referees": referees,
         "missingness_rate": missingness_rate,
         "detection_rate": detected_rate,
         "mean_confidence": mean_conf,
         "min_track_length": min_track,
         "max_track_length": max_track,
         "avg_track_length": avg_track,
-        "x_min": float(df["x"].min()) if not df["x"].isna().all() else np.nan,
-        "x_max": float(df["x"].max()) if not df["x"].isna().all() else np.nan,
-        "y_min": float(df["y"].min()) if not df["y"].isna().all() else np.nan,
-        "y_max": float(df["y"].max()) if not df["y"].isna().all() else np.nan,
+        "x_min": float(df["x"].min()) if not df.empty and not df["x"].isna().all() else np.nan,
+        "x_max": float(df["x"].max()) if not df.empty and not df["x"].isna().all() else np.nan,
+        "y_min": float(df["y"].min()) if not df.empty and not df["y"].isna().all() else np.nan,
+        "y_max": float(df["y"].max()) if not df.empty and not df["y"].isna().all() else np.nan,
     }]
     return pd.DataFrame(summary_data)
 
@@ -284,6 +466,10 @@ def export_gsr_package(
     fps: float = 25.0,
     pitch_length: float = 105.0,
     pitch_width: float = 68.0,
+    stitch: bool = True,
+    max_gap_frames: int = 75,
+    min_track_len: int = 3,
+    filter_referees: bool = False,
 ) -> Dict[str, Any]:
     """Reads raw TrackLab output, transforms to canonical schema, and produces export package."""
     exports_dir = output_dir / "exports"
@@ -352,6 +538,10 @@ def export_gsr_package(
         fps=fps,
         pitch_length=pitch_length,
         pitch_width=pitch_width,
+        stitch=stitch,
+        max_gap_frames=max_gap_frames,
+        min_track_len=min_track_len,
+        filter_referees=filter_referees,
     )
     canonical_csv_path = exports_dir / "gsr_tracking_canonical.csv"
     canonical_df.to_csv(canonical_csv_path, index=False)
@@ -417,6 +607,10 @@ def main() -> int:
     parser.add_argument("--fps", type=float, default=25.0, help="Frame rate")
     parser.add_argument("--pitch-length", type=float, default=105.0, help="Field length in meters")
     parser.add_argument("--pitch-width", type=float, default=68.0, help="Field width in meters")
+    parser.add_argument("--no-stitch", action="store_true", help="Disable tracklet consolidation")
+    parser.add_argument("--max-gap-frames", type=int, default=75, help="Max frame gap for tracklet stitching (default: 75 / 3s)")
+    parser.add_argument("--min-track-len", type=int, default=3, help="Minimum tracklet length to filter transient flickers (default: 3)")
+    parser.add_argument("--filter-referees", action="store_true", help="Exclude referee observations from canonical output")
     args = parser.parse_args()
 
     raw_path = Path(args.raw_output)
@@ -433,6 +627,10 @@ def main() -> int:
         fps=args.fps,
         pitch_length=args.pitch_length,
         pitch_width=args.pitch_width,
+        stitch=not args.no_stitch,
+        max_gap_frames=args.max_gap_frames,
+        min_track_len=args.min_track_len,
+        filter_referees=args.filter_referees,
     )
     return 0
 

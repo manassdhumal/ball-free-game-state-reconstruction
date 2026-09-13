@@ -271,6 +271,7 @@ def execute_one_sequence(
     config_name: str = "soccernet",
     data_dir: Optional[Path] = None,
     output_dir: Path = Path("results/gsr_kaggle"),
+    extra_args: Optional[List[str]] = None,
 ) -> int:
     """Executes the official TrackLab GSR baseline for exactly one sequence."""
     logs_dir = output_dir / "logs"
@@ -312,6 +313,8 @@ def execute_one_sequence(
     ]
     if data_dir:
         cmd.append(f"dataset.dataset_path={data_dir.resolve()}")
+    if extra_args:
+        cmd.extend(extra_args)
 
     env = os.environ.copy()
     env["MPLBACKEND"] = "Agg"
@@ -391,6 +394,7 @@ def main() -> int:
     parser.add_argument("--gsr-dir", type=str, default="soccernet-gamestate", help="Path to sn-gamestate repository")
     parser.add_argument("--output-dir", type=str, default="results/gsr_kaggle", help="Directory for output manifests & logs")
     parser.add_argument("--dry-run", action="store_true", help="Generate manifest without launching subprocess")
+    parser.add_argument("--extra-args", nargs="*", default=[], help="Extra Hydra overrides for tracklab")
     args = parser.parse_args()
 
     project_root = Path.cwd()
@@ -520,6 +524,7 @@ def main() -> int:
         config_name="soccernet",
         data_dir=data_dir,
         output_dir=output_dir,
+        extra_args=args.extra_args,
     )
 
 
