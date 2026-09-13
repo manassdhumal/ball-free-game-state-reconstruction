@@ -269,53 +269,73 @@ def convert_raw_tracklab_to_canonical(
     conf_candidates = ["confidence", "detection_confidence", "bbox_confidence", "conf", "score", "det_score", "track_confidence"]
     conf_col = next((c for c in conf_candidates if c in raw_df.columns), None)
 
-    default_team_map = {
-        "0": "home", "home": "home", "team_0": "home", "team_left": "home", "left": "home",
-        "1": "away", "away": "away", "team_1": "away", "team_right": "away", "right": "away",
-        "2": "referee", "referee": "referee", "ref": "referee",
-    }
-    mapping = team_mapping or default_team_map
-
-    def _map_team_value(val, role_val):
-        role_str = str(role_val or "").lower().strip()
-        if "ref" in role_str:
-            return "referee"
-        if val is None or pd.isna(val) or str(val).strip() == "" or str(val).lower() == "none":
-            return None
-        try:
-            key = str(int(float(val)))
-        except (ValueError, TypeError):
-            key = str(val).lower().strip()
-        if key in mapping:
-            return mapping[key]
-        if "away" in key or "right" in key or "1" in key:
-            return "away"
-        if "home" in key or "left" in key or "0" in key:
-            return "home"
-        if "ref" in key or "2" in key:
-            return "referee"
-        return None
-
-    # Track-level consensus team mapping (players don't change teams mid-sequence)
-    track_team_consensus: Dict[str, str] = {}
+    # Domain-aware track-level team & referee consensus mapping
+    track_meta: Dict[str, Dict[str, Any]] = {}
     for tid, group in raw_df.groupby(track_col):
         tid_str = str(int(tid)) if isinstance(tid, (int, float, np.integer, np.floating)) and not pd.isna(tid) else str(tid)
-        t_vals = group[team_col] if team_col in group.columns else [None] * len(group)
-        r_vals = group[role_col] if role_col in group.columns else [None] * len(group)
-        mapped = [_map_team_value(tv, rv) for tv, rv in zip(t_vals, r_vals)]
-        valid = [m for m in mapped if m is not None]
-        if valid:
-            track_team_consensus[tid_str] = pd.Series(valid).mode().iloc[0]
+        t_vals = group[team_col].dropna() if team_col in group.columns else pd.Series([], dtype=object)
+        r_vals = group[role_col].dropna() if role_col in group.columns else pd.Series([], dtype=object)
+        
+        # Calculate track-level spatial coordinates
+        x_vals = group[x_col].dropna() if x_col in group.columns else pd.Series([], dtype=float)
+        y_vals = group[y_col].dropna() if y_col in group.columns else pd.Series([], dtype=float)
+        
+        mx = float(x_vals.mean()) if not x_vals.empty else 0.5
+        my = float(y_vals.mean()) if not y_vals.empty else 0.5
+        # If in meters, convert to normalized [0, 1]
+        if abs(mx) > 1.5:
+            norm_mx = (mx + pitch_length / 2.0) / pitch_length
+            norm_my = (my + pitch_width / 2.0) / pitch_width
         else:
-            role_strs = [str(r).lower() for r in r_vals if pd.notna(r)]
-            if any("ref" in r for r in role_strs):
-                track_team_consensus[tid_str] = "referee"
-            else:
-                mean_x = group[x_col].mean() if x_col in group.columns and not group[x_col].isna().all() else 0.0
-                if abs(mean_x) > 1.5:
-                    track_team_consensus[tid_str] = "home" if mean_x < 0 else "away"
-                else:
-                    track_team_consensus[tid_str] = "home" if mean_x < 0.5 else "away"
+            norm_mx, norm_my = mx, my
+            
+        raw_team_mode = str(t_vals.mode().iloc[0]).lower().strip() if not t_vals.empty else ""
+        raw_role_mode = str(r_vals.mode().iloc[0]).lower().strip() if not r_vals.empty else ""
+        
+        track_meta[tid_str] = {
+            "tid": tid_str,
+            "mean_x": norm_mx,
+            "mean_y": norm_my,
+            "raw_team": raw_team_mode,
+            "raw_role": raw_role_mode,
+            "count": len(group),
+        }
+
+    track_team_consensus: Dict[str, str] = {}
+    
+    # 1. Sideline Linesmen / Assistant Referees: stationed on touchlines (|y| <= 0.05 or >= 0.95)
+    for tid_str, meta in track_meta.items():
+        if meta["mean_y"] < 0.05 or meta["mean_y"] > 0.95:
+            track_team_consensus[tid_str] = "referee"
+            
+    # 2. Main On-Pitch Referee: isolated official with explicit role 'referee'
+    remaining = {k: v for k, v in track_meta.items() if k not in track_team_consensus}
+    explicit_refs = [k for k, v in remaining.items() if "ref" in v["raw_role"]]
+    if 0 < len(explicit_refs) <= 2:
+        for k in explicit_refs:
+            track_team_consensus[k] = "referee"
+            
+    # 3. All remaining tracks MUST belong to the two competing teams (Home vs Away)
+    players = {k: v for k, v in track_meta.items() if k not in track_team_consensus}
+    
+    # Compute average X position per cluster/raw_team
+    cluster_xs: Dict[str, List[float]] = {}
+    for meta in players.values():
+        rt = meta["raw_team"]
+        cluster_xs.setdefault(rt, []).append(meta["mean_x"])
+    cluster_means = {k: float(np.mean(v)) for k, v in cluster_xs.items()}
+    
+    for tid_str, meta in players.items():
+        rt = meta["raw_team"]
+        mx = meta["mean_x"]
+        if "left" in rt or "home" in rt:
+            track_team_consensus[tid_str] = "home"
+        elif "right" in rt or "away" in rt:
+            track_team_consensus[tid_str] = "away"
+        else:
+            # Use cluster mean or individual mean
+            c_mx = cluster_means.get(rt, mx)
+            track_team_consensus[tid_str] = "home" if c_mx < 0.52 else "away"
 
     # Check if frame numbers are raw encoded image filenames (e.g., 2040000001)
     raw_frames = pd.to_numeric(raw_df[frame_col], errors="coerce").dropna().astype(int)
