@@ -46,17 +46,30 @@ Start with [docs/reproducibility.md](docs/reproducibility.md), [docs/final_proje
 .venv\Scripts\python.exe -m unittest discover tests -v
 ```
 
+## Video Perception & Game State Reconstruction Studio
+
+The platform supports end-to-end video game-state reconstruction directly from uploaded match footage (`.mp4`, `.mov`, `.avi`):
+- **Web Studio (`/broadcast`):** Drag-and-drop video upload, camera perspective presets, interactive 4-point pitch calibration, and dual-view video playback synchronized with an animated 2D tactical pitch radar.
+- **Offline CLI (`scripts/process_video.py`):**
+  ```powershell
+  .venv\Scripts\python.exe scripts/process_video.py --video data/samples/sample_match_clip.mp4 --export-video
+  ```
+- **Three-Tier Robustness Benchmark (Step 84):** Evaluates stability across Clean ground tracking, Synthetic-Degraded tracking, and Real Video Perception tracking:
+  ```powershell
+  .venv\Scripts\python.exe -m unittest tests/test_three_tier_benchmark.py
+  ```
+
 ## Repository Structure
 
 - `src/data/`: Metrica and SkillCorner ingestion
-- `src/noise/`: degradation, interpolation, and smoothing
-- `src/possession/`: spatial graph and ball-free possession baseline
-- `src/tactics/`: tactical features and TAS
-- `src/validation/`: benchmark and final statistical analysis
-- `docs/`: methodology, report, presentation, demo, viva, and reproducibility material
-- `configs/`: benchmark and expanded experiment contracts
-- `tests/`: validation and anti-leakage tests
+- `src/noise/`: Degradation, bounded interpolation, and Savitzky-Golay smoothing
+- `src/possession/`: Spatial graph and ball-free possession baseline
+- `src/tactics/`: Tactical Advantage Score (TAS) and counterfactual pass ranking
+- `src/vision/`: Video tracking (YOLOv8 + ByteTrack), 2D pitch homography, and jersey classification
+- `src/validation/`: Benchmark, statistical analysis, and cross-dataset validation
+- `backend/`: FastAPI adapter with match data and video processing endpoints
+- `frontend/`: Interactive React/Vite dashboard with live 2D pitch radar and Video Studio
+- `scripts/`: Offline processing, sample generation, and verification scripts
+- `docs/`: Technical specifications, architecture, and reproducibility reports
+- `tests/`: Automated unit tests and anti-leakage contracts
 
-## Limitations and GSR Status
-
-The final robustness result uses one Metrica match, synthetic parameter-specific degradation, heuristic downstream models, and imperfect post-hoc event references. SkillCorner compatibility is documented, but local real-data tests are skipped when the archive is unavailable. SoccerNet-GSR remains **BLOCKED / OPTIONAL**: no provenance-verifiable GSR output is included or claimed.

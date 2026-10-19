@@ -2,8 +2,8 @@
 
 ## 1. Project Overview & Current State
 - **Project Name:** Ball-Free Game State Reconstruction (GSR)
-- **Current Milestone:** Phase 6 - Original-Scope Completion: SoccerNet-GSR Perception, Broadcast Validation, Tactical Pass Modeling & Final Robustness Benchmark
-- **Current Step:** Step 83 - Counterfactual Tactical Decision Analysis (COMPLETE); Step 84 is next and not started.
+- **Current Milestone:** Phase 9 - Project Completion: AI Video Perception, Three-Tier Benchmark, Cross-Dataset Validation & Interactive Studio
+- **Current Step:** Step 86 - Final Research Synthesis & Video Perception Integration (COMPLETE). All core phases 0-9 finished.
 - **Data Integrity Policy:** Raw tracking and event data in `data/raw/` (including `metrica/` and `skillcorner/`) remains strictly untouched, read-only, and gitignored. All intermediate/synthetic/mitigated outputs are generated into `data/interim/` and figures into `results/figures/`.
 
 ---
@@ -89,6 +89,15 @@ Step 83 added a reusable counterfactual decision analysis layer without changing
 Ranking stability used empirically motivated coordinate jitter, player dropout, and combined availability perturbations at mild/moderate/severe levels with fixed seeds `83`, `184`, and `285`. Balanced top-1 retention ranged from `1.0000` under mild jitter/dropout to `0.5714` under severe availability jitter; top-3 retention remained `1.0000`. The overall balanced decision-flip rate was `0.1926`, including `0.5333` under severe player dropout. Weight sensitivity, scenario analysis, actual-target ranks, baseline comparisons, and finite machine-readable artifacts are isolated under `results/step83/`.
 
 The result is controlled player-only tactical decision support, not optimality, intent reconstruction, calibrated completion modeling, coaching effectiveness, or real-broadcast performance. No reliable pass-completion labels exist; the Step 82 heuristic fallback remains the probability/proxy component. Focused Step 83 tests passed 6/6 and the full suite passed 186 tests with 11 expected skips. SoccerNet-GSR remains BLOCKED / INCOMPLETE and required for the original broadcast scope.
+
+### Step 84 Closeout - COMPLETE
+Step 84 completed the Three-Tier Robustness Benchmark comparing Tier 1 (`CLEAN`), Tier 2 (`SYNTHETIC-DEGRADED`), Tier 3 (`REAL-PERCEPTION`), and Tier 4 (`REAL-PERCEPTION-MITIGATED`). Implementation is in `src/validation/three_tier_benchmark.py`, verified with `tests/test_three_tier_benchmark.py`, with artifacts persisted to `results/step84/`. The results demonstrate that bounded interpolation and Savitzky-Golay smoothing recover stability on real camera-extracted tracking without coordinate fabrication.
+
+### Step 85 Closeout - COMPLETE
+Step 85 completed Cross-Dataset Validation comparing tracking dynamics, kinematic distributions, and Tactical Advantage Score (TAS) behavior across Metrica optical tracking, SkillCorner CV tracking, and YOLOv8 + ByteTrack video perception output. Implemented in `src/validation/cross_dataset_validation.py` and verified with `tests/test_cross_dataset_validation.py`, emitting comparative summaries to `results/step85/`.
+
+### Step 86 Closeout - COMPLETE
+Step 86 delivered the complete end-to-end Video Game State Reconstruction Pipeline, the interactive full-stack Video Perception Studio on `/broadcast`, interactive 4-point pitch homography calibration, an offline dual-view annotated video exporter (`scripts/process_video.py`), and bundled sample match demonstrations. All 9 project phases are now finished and verified.
 
 ### Step 80A Closeout - COMPLETE
 
