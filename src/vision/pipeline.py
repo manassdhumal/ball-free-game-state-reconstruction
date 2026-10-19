@@ -86,7 +86,7 @@ class VideoAnalysisPipeline:
                 progress_callback(0.82, "Applying bounded interpolation and Savitzky-Golay smoothing...")
             try:
                 interp_df = interpolate_trajectory(tracking_df, max_gap=10)
-                tracking_df = smooth_trajectory(interp_df, method="savitzky_golay", window_length=7, polyorder=2)
+                tracking_df = smooth_trajectory(interp_df, method="savgol", window_length=7, polyorder=2)
             except Exception:
                 # Fallback to raw tracking if sequence is too short for smoothing window
                 pass

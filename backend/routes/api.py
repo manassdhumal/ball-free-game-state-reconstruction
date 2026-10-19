@@ -162,6 +162,7 @@ class ProcessVideoRequest(BaseModel):
     max_frames: int = 150
     frame_stride: int = 1
     apply_mitigation: bool = True
+    custom_corners: Optional[list[list[float]]] = None
 
 
 @router.post("/video/upload")
@@ -188,6 +189,38 @@ async def upload_video(file: UploadFile = File(...)):
     }
 
 
+@router.post("/video/sample-demo")
+def sample_demo():
+    """Immediately processes the bundled sample football clip."""
+    sample_file = Path(__file__).resolve().parents[2] / "data" / "samples" / "sample_match_clip.mp4"
+    if not sample_file.exists():
+        raise HTTPException(status_code=404, detail="Sample match video not found on disk.")
+
+    demo_id = "sample_demo_clip"
+    dest_video = UPLOAD_DIR / f"{demo_id}.mp4"
+    if not dest_video.exists():
+        shutil.copyfile(sample_file, dest_video)
+
+    match_id = f"uploaded_{demo_id}"
+    VIDEO_PROGRESS[demo_id] = {"progress": 0.1, "status": "Processing bundled match clip"}
+
+    def progress_callback(ratio: float, msg: str):
+        VIDEO_PROGRESS[demo_id] = {"progress": round(ratio, 2), "status": msg}
+
+    pipeline = VideoAnalysisPipeline(homography_preset="main_broadcast")
+    result = pipeline.analyze_video(
+        video_path=str(dest_video),
+        match_id=match_id,
+        max_frames=120,
+        frame_stride=1,
+        apply_mitigation=True,
+        progress_callback=progress_callback,
+    )
+
+    data.tracking.cache_clear()
+    return {"status": "success", "video_id": demo_id, "match_id": match_id, "data": result}
+
+
 @router.post("/video/process")
 def process_video(req: ProcessVideoRequest):
     # Locate video file
@@ -202,7 +235,11 @@ def process_video(req: ProcessVideoRequest):
     def progress_callback(ratio: float, msg: str):
         VIDEO_PROGRESS[req.video_id] = {"progress": round(ratio, 2), "status": msg}
 
+    from src.vision.homography import PitchHomography
     pipeline = VideoAnalysisPipeline(homography_preset=req.preset)
+    if req.custom_corners and len(req.custom_corners) == 4:
+        pipeline.homography = PitchHomography.from_four_points(req.custom_corners)
+
     result = pipeline.analyze_video(
         video_path=str(video_path),
         match_id=match_id,
@@ -229,6 +266,10 @@ def video_status(video_id: str):
 def stream_video(video_id: str):
     matching = list(UPLOAD_DIR.glob(f"{video_id}.*"))
     if not matching:
+        # Check bundled samples
+        sample_path = Path(__file__).resolve().parents[2] / "data" / "samples" / f"{video_id}.mp4"
+        if sample_path.exists():
+            return FileResponse(str(sample_path), media_type="video/mp4")
         raise HTTPException(status_code=404, detail="Video not found")
     video_path = matching[0]
     return FileResponse(str(video_path), media_type="video/mp4")

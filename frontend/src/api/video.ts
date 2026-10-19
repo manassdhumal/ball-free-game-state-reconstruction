@@ -55,6 +55,7 @@ export function processVideo(params: {
   max_frames?: number;
   frame_stride?: number;
   apply_mitigation?: boolean;
+  custom_corners?: Array<[number, number]>;
 }): Promise<VideoProcessResponse> {
   return apiFetch<VideoProcessResponse>("/video/process", {
     method: "POST",
@@ -65,7 +66,14 @@ export function processVideo(params: {
       max_frames: params.max_frames ?? 150,
       frame_stride: params.frame_stride ?? 1,
       apply_mitigation: params.apply_mitigation ?? true,
+      custom_corners: params.custom_corners,
     }),
+  });
+}
+
+export function runSampleDemo(): Promise<VideoProcessResponse> {
+  return apiFetch<VideoProcessResponse>("/video/sample-demo", {
+    method: "POST",
   });
 }
 

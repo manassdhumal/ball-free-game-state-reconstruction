@@ -12,7 +12,10 @@ import {
   Layers, 
   Activity, 
   ShieldCheck, 
-  RefreshCw 
+  RefreshCw,
+  Sparkles,
+  Crosshair,
+  RotateCcw
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { Panel, PageHeader } from "@/components/Panel";
@@ -23,6 +26,7 @@ import {
   processVideo, 
   getVideoStatus, 
   getVideoStreamUrl, 
+  runSampleDemo,
   type VideoProcessResponse 
 } from "@/api/video";
 import { apiFetch } from "@/api/client";
@@ -63,6 +67,10 @@ function VideoReconstructionStudio() {
   const [frameStride, setFrameStride] = useState(1);
   const [applyMitigation, setApplyMitigation] = useState(true);
 
+  // 4-Point Interactive Calibration state
+  const [isCalibrating, setIsCalibrating] = useState(false);
+  const [customPoints, setCustomPoints] = useState<Array<[number, number]>>([]);
+
   const [isUploading, setIsUploading] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -75,6 +83,7 @@ function VideoReconstructionStudio() {
   const [isPlaying, setIsPlaying] = useState(false);
   const [framePlayers, setFramePlayers] = useState<Player[]>([]);
   const videoRef = useRef<HTMLVideoElement | null>(null);
+  const videoContainerRef = useRef<HTMLDivElement | null>(null);
 
   // File drop handler
   const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
@@ -82,6 +91,45 @@ function VideoReconstructionStudio() {
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
       setFile(e.dataTransfer.files[0]);
       setErrorMsg(null);
+    }
+  };
+
+  // Video container click for 4-point calibration
+  const handleVideoClick = (e: React.MouseEvent<HTMLDivElement>) => {
+    if (!isCalibrating || customPoints.length >= 4) return;
+    const rect = videoContainerRef.current?.getBoundingClientRect();
+    if (!rect) return;
+
+    const clickX = e.clientX - rect.left;
+    const clickY = e.clientY - rect.top;
+    const relX = clickX / rect.width;
+    const relY = clickY / rect.height;
+
+    // Map relative fraction to video dimensions (default 1280x720)
+    const px = Math.round(relX * 1280);
+    const py = Math.round(relY * 720);
+
+    setCustomPoints((prev) => [...prev, [px, py]]);
+  };
+
+  // Run Sample Demo
+  const handleRunSampleDemo = async () => {
+    try {
+      setErrorMsg(null);
+      setIsProcessing(true);
+      setStatusMsg("Running AI perception on bundled match demo...");
+      setProgress(0.2);
+
+      const demoRes = await runSampleDemo();
+      setVideoId("sample_demo_clip");
+      setProgress(1.0);
+      setStatusMsg("Demo game state reconstructed!");
+      setIsProcessing(false);
+      setAnalysisResult(demoRes);
+      setCurrentFrame(0);
+    } catch (err: any) {
+      setIsProcessing(false);
+      setErrorMsg(err.message || "Failed to run sample demo.");
     }
   };
 
@@ -120,10 +168,11 @@ function VideoReconstructionStudio() {
 
       const processRes = await processVideo({
         video_id: uploadRes.video_id,
-        preset,
+        preset: preset === "custom_4point" ? "main_broadcast" : preset,
         max_frames: maxFrames,
         frame_stride: frameStride,
         apply_mitigation: applyMitigation,
+        custom_corners: customPoints.length === 4 ? customPoints : undefined,
       });
 
       clearInterval(pollInterval);
@@ -194,18 +243,25 @@ function VideoReconstructionStudio() {
     <>
       <PageHeader
         title="Video Game State Reconstruction Studio"
-        description="Upload a gameplay video clip to extract player tracks, project onto a 2D pitch, and compute ball-free possession and Tactical Advantage Scores in real time."
+        description="Upload a gameplay video clip to detect players, reconstruct pitch coordinates, and compute ball-free possession and Tactical Advantage Scores in real time."
       />
 
-      {/* Perception Engine Banner */}
-      <div className="mb-4 border border-emerald-500/40 bg-emerald-500/10 px-3 py-2.5 text-[12px] leading-relaxed text-emerald-400 flex items-center justify-between">
+      {/* Perception Engine Banner & One-Click Demo Action */}
+      <div className="mb-4 border border-emerald-500/40 bg-emerald-500/10 px-3 py-2.5 text-[12px] leading-relaxed text-emerald-400 flex flex-wrap items-center justify-between gap-2 rounded">
         <div className="flex items-center gap-2">
-          <ShieldCheck className="h-4 w-4 text-emerald-400" />
+          <ShieldCheck className="h-4 w-4 text-emerald-400 shrink-0" />
           <span>
-            <strong className="uppercase tracking-wider">Perception Engine Active:</strong> YOLOv8 + ByteTrack + 2D Homography Adapter is ready.
+            <strong className="uppercase tracking-wider">Perception Engine Active:</strong> YOLOv8 + ByteTrack + 2D Homography is operational.
           </span>
         </div>
-        <span className="text-[11px] text-muted-foreground">CUDA / RTX 4050 Acceleration Available</span>
+        <button
+          onClick={handleRunSampleDemo}
+          disabled={isUploading || isProcessing}
+          className="flex items-center gap-1.5 bg-emerald-700 hover:bg-emerald-600 disabled:opacity-50 text-white text-[11px] font-semibold py-1 px-3 rounded transition-colors"
+        >
+          <Sparkles className="h-3.5 w-3.5 text-yellow-300" />
+          <span>Run One-Click Demo Clip</span>
+        </button>
       </div>
 
       {/* Main Grid: Upload & Analysis */}
@@ -217,7 +273,7 @@ function VideoReconstructionStudio() {
             <div
               onDragOver={(e) => e.preventDefault()}
               onDrop={handleDrop}
-              className={`border-2 border-dashed p-6 text-center cursor-pointer transition-colors ${
+              className={`border-2 border-dashed p-6 text-center cursor-pointer transition-colors rounded ${
                 file ? "border-emerald-500/60 bg-emerald-500/5" : "border-border hover:border-emerald-500/40"
               }`}
               onClick={() => document.getElementById("video-file-input")?.click()}
@@ -258,14 +314,45 @@ function VideoReconstructionStudio() {
                 </span>
                 <select
                   value={preset}
-                  onChange={(e) => setPreset(e.target.value)}
+                  onChange={(e) => {
+                    setPreset(e.target.value);
+                    if (e.target.value === "custom_4point") {
+                      setIsCalibrating(true);
+                    } else {
+                      setIsCalibrating(false);
+                    }
+                  }}
                   className="bg-panel border border-border px-2 py-1 text-xs rounded"
                 >
                   <option value="main_broadcast">Main Broadcast (Elevated Sideline)</option>
                   <option value="tactical_wide">Tactical Wide (High Endline)</option>
                   <option value="normalized">Normalized 2D Radar View</option>
+                  <option value="custom_4point">Custom 4-Point Calibration</option>
                 </select>
               </div>
+
+              {/* 4-Point Interactive Calibration Banner */}
+              {preset === "custom_4point" && (
+                <div className="border border-blue-500/40 bg-blue-500/10 p-2 text-xs rounded space-y-1.5">
+                  <div className="flex items-center justify-between font-semibold text-blue-400">
+                    <span className="flex items-center gap-1">
+                      <Crosshair className="h-3.5 w-3.5" /> 4-Point Calibration Mode
+                    </span>
+                    <button
+                      onClick={() => setCustomPoints([])}
+                      className="text-[10px] text-muted-foreground hover:text-white flex items-center gap-0.5"
+                    >
+                      <RotateCcw className="h-3 w-3" /> Reset
+                    </button>
+                  </div>
+                  <div className="text-[11px] text-muted-foreground">
+                    Click 4 pitch points on the video: Top-Left, Top-Right, Bottom-Right, Bottom-Left.
+                  </div>
+                  <div className="font-mono text-[10px] text-blue-300">
+                    Points placed: {customPoints.length} / 4
+                  </div>
+                </div>
+              )}
 
               <div className="flex items-center justify-between">
                 <span className="text-muted-foreground font-medium">Max Frames to Process</span>
@@ -384,13 +471,19 @@ function VideoReconstructionStudio() {
           >
             {/* Split Screen Container */}
             <div className="grid md:grid-cols-2 gap-3 items-center">
-              {/* Video Player */}
-              <div className="relative aspect-video bg-black border border-border flex items-center justify-center overflow-hidden rounded">
+              {/* Video Player & Calibration Canvas */}
+              <div 
+                ref={videoContainerRef}
+                onClick={handleVideoClick}
+                className={`relative aspect-video bg-black border border-border flex items-center justify-center overflow-hidden rounded ${
+                  isCalibrating ? "cursor-crosshair ring-2 ring-blue-500" : ""
+                }`}
+              >
                 {videoId ? (
                   <video
                     ref={videoRef}
                     src={getVideoStreamUrl(videoId)}
-                    className="w-full h-full object-contain"
+                    className="w-full h-full object-contain pointer-events-none"
                     controls={false}
                   />
                 ) : (
@@ -399,6 +492,18 @@ function VideoReconstructionStudio() {
                     <span className="text-xs">Uploaded video will play here</span>
                   </div>
                 )}
+                
+                {/* 4-Point Calibration Markers */}
+                {isCalibrating && customPoints.map((pt, i) => (
+                  <div
+                    key={i}
+                    className="absolute w-5 h-5 -ml-2.5 -mt-2.5 rounded-full bg-blue-500 text-white font-bold text-[10px] flex items-center justify-center shadow-lg border border-white"
+                    style={{ left: `${(pt[0] / 1280) * 100}%`, top: `${(pt[1] / 720) * 100}%` }}
+                  >
+                    {i + 1}
+                  </div>
+                ))}
+
                 {videoId && (
                   <div className="absolute top-2 left-2 bg-black/70 px-1.5 py-0.5 text-[10px] font-mono text-white rounded">
                     Frame {currentFrame}
