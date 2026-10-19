@@ -35,6 +35,9 @@ def _clean(value: Any) -> Any:
 
 
 def _paths(match_id: str) -> tuple[Path, Path, Path]:
+    if match_id.startswith("uploaded_") or match_id.startswith("video_"):
+        interim_csv = ROOT / "data" / "interim" / f"{match_id}_canonical_tracking.csv"
+        return interim_csv, interim_csv, interim_csv
     if not match_id.startswith("metrica_game"):
         raise KeyError(match_id)
     number = match_id.removeprefix("metrica_game")
@@ -46,15 +49,22 @@ def _paths(match_id: str) -> tuple[Path, Path, Path]:
     )
 
 
-@lru_cache(maxsize=2)
+@lru_cache(maxsize=16)
 def tracking(match_id: str) -> pd.DataFrame:
+    if match_id.startswith("uploaded_") or match_id.startswith("video_"):
+        csv_path = ROOT / "data" / "interim" / f"{match_id}_canonical_tracking.csv"
+        if not csv_path.exists():
+            raise FileNotFoundError(f"Uploaded tracking file not found: {csv_path}")
+        return pd.read_csv(csv_path)
     home, away, _ = _paths(match_id)
     players, _ball = load_metrica_match(str(home), str(away), match_id)
     return players
 
 
-@lru_cache(maxsize=2)
+@lru_cache(maxsize=16)
 def events(match_id: str) -> pd.DataFrame:
+    if match_id.startswith("uploaded_") or match_id.startswith("video_"):
+        return pd.DataFrame(columns=["match_id", "frame", "timestamp", "type", "team", "player_id"])
     _home, _away, event_path = _paths(match_id)
     return load_metrica_events(str(event_path), match_id)
 
@@ -74,6 +84,24 @@ def matches() -> list[dict[str, Any]]:
             "events_available": _paths(match_id)[2].exists(),
             "tracking_available": True,
         })
+    # Dynamically include uploaded video gameplay matches
+    interim_dir = ROOT / "data" / "interim"
+    if interim_dir.exists():
+        for csv_file in interim_dir.glob("*_canonical_tracking.csv"):
+            m_id = csv_file.name.replace("_canonical_tracking.csv", "")
+            try:
+                df = tracking(m_id)
+                frame_count = int(df["frame"].max())
+                result.append({
+                    "match_id": m_id,
+                    "label": f"Video: {m_id.replace('uploaded_', '').replace('_', ' ').title()}",
+                    "fps": FPS,
+                    "frame_count": frame_count,
+                    "events_available": False,
+                    "tracking_available": True,
+                })
+            except Exception:
+                continue
     return result
 
 

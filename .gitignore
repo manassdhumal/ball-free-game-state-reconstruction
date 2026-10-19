@@ -44,3 +44,7 @@ __pycache__/
 # Frontend local environment
 frontend/.env
 frontend/.env.local
+
+# Model weights & temp results
+*.pt
+results_tmp_smoke/

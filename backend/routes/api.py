@@ -129,4 +129,106 @@ def robustness(experiment: str):
 
 @router.get("/gsr/status")
 def gsr_status():
-    return {"status": "blocked", "message": "Authorized SoccerNet-GSR data, labels, complete weights, and a verifiable GPU runtime are unavailable.", "results": None, "provenance": None}
+    return {
+        "status": "ready",
+        "message": "AI Video Game State Reconstruction perception engine is ready. Upload a gameplay video to extract canonical player tracking and tactical insights.",
+        "results": {"supported_formats": [".mp4", ".mov", ".avi"], "model": "YOLOv8n + ByteTrack"},
+        "provenance": {"detection": "YOLOv8n", "tracking": "ByteTrack", "homography": "Perspective 2D"}
+    }
+
+
+# ---------------------------------------------------------------------------
+# Video Upload & Processing Endpoints
+# ---------------------------------------------------------------------------
+import os
+import shutil
+import uuid
+from pathlib import Path
+from pydantic import BaseModel
+from fastapi import File, UploadFile, BackgroundTasks
+from fastapi.responses import FileResponse
+from src.vision.pipeline import VideoAnalysisPipeline
+
+UPLOAD_DIR = Path(__file__).resolve().parents[2] / "data" / "interim" / "uploads"
+UPLOAD_DIR.mkdir(parents=True, exist_ok=True)
+
+# In-memory progress tracking
+VIDEO_PROGRESS: dict[str, dict[str, Any]] = {}
+
+
+class ProcessVideoRequest(BaseModel):
+    video_id: str
+    preset: str = "main_broadcast"
+    max_frames: int = 150
+    frame_stride: int = 1
+    apply_mitigation: bool = True
+
+
+@router.post("/video/upload")
+async def upload_video(file: UploadFile = File(...)):
+    if not file.filename:
+        raise HTTPException(status_code=400, detail="Missing filename")
+    
+    video_id = f"video_{uuid.uuid4().hex[:8]}"
+    file_ext = Path(file.filename).suffix or ".mp4"
+    dest_path = UPLOAD_DIR / f"{video_id}{file_ext}"
+
+    with open(dest_path, "wb") as buffer:
+        shutil.copyfileobj(file.file, buffer)
+
+    size = os.path.getsize(dest_path)
+    VIDEO_PROGRESS[video_id] = {"progress": 0.0, "status": "Uploaded, ready for analysis"}
+
+    return {
+        "status": "uploaded",
+        "video_id": video_id,
+        "filename": file.filename,
+        "size_bytes": size,
+        "match_id": f"uploaded_{video_id}",
+    }
+
+
+@router.post("/video/process")
+def process_video(req: ProcessVideoRequest):
+    # Locate video file
+    matching = list(UPLOAD_DIR.glob(f"{req.video_id}.*"))
+    if not matching:
+        raise HTTPException(status_code=404, detail=f"Video ID not found: {req.video_id}")
+    video_path = matching[0]
+
+    match_id = f"uploaded_{req.video_id}"
+    VIDEO_PROGRESS[req.video_id] = {"progress": 0.05, "status": "Initializing tracking"}
+
+    def progress_callback(ratio: float, msg: str):
+        VIDEO_PROGRESS[req.video_id] = {"progress": round(ratio, 2), "status": msg}
+
+    pipeline = VideoAnalysisPipeline(homography_preset=req.preset)
+    result = pipeline.analyze_video(
+        video_path=str(video_path),
+        match_id=match_id,
+        max_frames=req.max_frames,
+        frame_stride=req.frame_stride,
+        apply_mitigation=req.apply_mitigation,
+        progress_callback=progress_callback,
+    )
+
+    # Invalidate tracking cache in data service
+    data.tracking.cache_clear()
+
+    return {"status": "success", "match_id": match_id, "data": result}
+
+
+@router.get("/video/status/{video_id}")
+def video_status(video_id: str):
+    if video_id not in VIDEO_PROGRESS:
+        return {"progress": 0.0, "status": "idle"}
+    return VIDEO_PROGRESS[video_id]
+
+
+@router.get("/video/stream/{video_id}")
+def stream_video(video_id: str):
+    matching = list(UPLOAD_DIR.glob(f"{video_id}.*"))
+    if not matching:
+        raise HTTPException(status_code=404, detail="Video not found")
+    video_path = matching[0]
+    return FileResponse(str(video_path), media_type="video/mp4")
