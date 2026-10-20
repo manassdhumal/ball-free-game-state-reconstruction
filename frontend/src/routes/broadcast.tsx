@@ -31,6 +31,7 @@ import {
 } from "@/api/video";
 import { apiFetch } from "@/api/client";
 import type { Player } from "@/lib/data";
+import { useSession } from "@/lib/session";
 
 export const Route = createFileRoute("/broadcast")({
   head: () => ({
@@ -57,6 +58,7 @@ const PIPELINE_MODULES = [
 
 function VideoReconstructionStudio() {
   const navigate = useNavigate();
+  const { setMatchId, setDataset, setFrame } = useSession();
   const statusQuery = useQuery({ queryKey: ["gsr-status"], queryFn: getGsrStatus, staleTime: 30_000 });
 
   // Upload & processing state
@@ -127,6 +129,9 @@ function VideoReconstructionStudio() {
       setIsProcessing(false);
       setAnalysisResult(demoRes);
       setCurrentFrame(0);
+      setMatchId(demoRes.match_id);
+      setDataset(`Sample Match Clip (${demoRes.match_id})`);
+      setFrame(0);
     } catch (err: any) {
       setIsProcessing(false);
       setErrorMsg(err.message || "Failed to run sample demo.");
@@ -181,6 +186,9 @@ function VideoReconstructionStudio() {
       setIsProcessing(false);
       setAnalysisResult(processRes);
       setCurrentFrame(0);
+      setMatchId(processRes.match_id);
+      setDataset(`Video: ${file.name.replace(/\.[^/.]+$/, "")}`);
+      setFrame(0);
     } catch (err: any) {
       setIsUploading(false);
       setIsProcessing(false);
@@ -452,13 +460,22 @@ function VideoReconstructionStudio() {
                 </div>
               </div>
 
-              <button
-                onClick={() => navigate({ to: "/game-state" })}
-                className="mt-3 w-full flex items-center justify-center gap-1.5 border border-border hover:bg-panel-alt text-xs font-medium py-1.5 px-3 rounded transition-colors"
-              >
-                <span>Open in Full Match Explorer</span>
-                <ArrowRight className="h-3.5 w-3.5" />
-              </button>
+              <div className="mt-3 grid grid-cols-2 gap-2">
+                <button
+                  onClick={() => navigate({ to: "/match-explorer" })}
+                  className="flex items-center justify-center gap-1.5 border border-border bg-panel-alt hover:bg-muted text-xs font-medium py-1.5 px-2 rounded transition-colors"
+                >
+                  <span>Match Explorer</span>
+                  <ArrowRight className="h-3 w-3" />
+                </button>
+                <button
+                  onClick={() => navigate({ to: "/game-state" })}
+                  className="flex items-center justify-center gap-1.5 bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold py-1.5 px-2 rounded transition-colors"
+                >
+                  <span>Game State Radar</span>
+                  <ArrowRight className="h-3 w-3" />
+                </button>
+              </div>
             </Panel>
           )}
         </div>

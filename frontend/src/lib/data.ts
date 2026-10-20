@@ -536,5 +536,5 @@ export const PIPELINE = [
     detail: "MRR 0.583 · hypothetical only",
   },
   { id: 6, name: "Robustness", state: "partial", detail: "8 conditions evaluated" },
-  { id: 7, name: "Broadcast / GSR", state: "blocked", detail: "Integration pending" },
+  { id: 7, name: "Broadcast / GSR", state: "ok", detail: "YOLO + ByteTrack Studio Active" },
 ];

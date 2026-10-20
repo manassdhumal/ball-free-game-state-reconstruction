@@ -25,8 +25,8 @@ export const Route = createFileRoute("/game-state")({
 });
 
 function GameState() {
-  const { frame, selectedPlayer, setSelectedPlayer } = useSession();
-  const liveState = useLivePlayers("metrica_game1", frame);
+  const { matchId, frame, selectedPlayer, setSelectedPlayer } = useSession();
+  const liveState = useLivePlayers(matchId, frame);
   const players = liveState.data ?? [];
   if (liveState.isLoading)
     return <PageHeader title="Game State" description="Loading live canonical player state…" />;

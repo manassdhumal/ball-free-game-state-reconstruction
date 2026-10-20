@@ -23,6 +23,7 @@ class VideoGameStateTracker:
         homography: PitchHomography | None = None,
         conf_threshold: float = 0.20,
         tracker_config: str | None = None,
+        homography_preset: str = "main_broadcast",
     ) -> None:
         """Initialize the YOLO-based video tracker.
 
@@ -31,10 +32,12 @@ class VideoGameStateTracker:
             homography: PitchHomography instance. If None, default normalized mapping is used.
             conf_threshold: Minimum detection confidence score.
             tracker_config: Path to tracker YAML config. Defaults to configs/bytetrack_football.yaml if present.
+            homography_preset: Empirical camera preset if homography matrix is identity.
         """
         self.model = YOLO(model_name)
         self.homography = homography or PitchHomography()
         self.conf_threshold = conf_threshold
+        self.homography_preset = homography_preset
         self.classifier = JerseyClassifier()
         if tracker_config is not None:
             self.tracker_config = tracker_config
@@ -74,9 +77,9 @@ class VideoGameStateTracker:
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-        # Check if homography is using identity; if so, create empirical broadcast homography
+        # Check if homography is using identity; if so, create empirical homography from preset
         if np.allclose(self.homography.matrix, np.eye(3)):
-            self.homography = PitchHomography.from_preset("main_broadcast", width, height)
+            self.homography = PitchHomography.from_preset(self.homography_preset, width, height)
 
         if max_frames is not None:
             frames_to_process = min(total_frames, max_frames)

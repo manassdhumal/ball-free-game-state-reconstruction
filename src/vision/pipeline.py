@@ -62,6 +62,7 @@ class VideoAnalysisPipeline:
         tracker = VideoGameStateTracker(
             homography=self.homography,
             conf_threshold=self.conf_threshold,
+            homography_preset=self.homography_preset,
         )
 
         tracking_df = tracker.process_video(

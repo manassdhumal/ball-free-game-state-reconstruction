@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
 import { useEffect } from "react";
 import { useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Pause, Play, SkipBack, SkipForward } from "lucide-react";
 import { Panel, PageHeader } from "@/components/Panel";
 import { Pitch, PitchLegend } from "@/components/Pitch";
@@ -17,6 +18,7 @@ import {
 } from "@/lib/data";
 import { useSession } from "@/lib/session";
 import { useLivePlayers } from "@/hooks/useGameState";
+import { getMatches } from "@/api/matches";
 
 export const Route = createFileRoute("/match-explorer")({
   head: () => ({
@@ -56,19 +58,36 @@ function MatchExplorer() {
   const livePlayers = useLivePlayers(matchId, frame);
   const players = livePlayers.data ?? [];
   const sel = players.find((p) => p.id === selectedPlayer) ?? players[0];
+  const matchesQuery = useQuery({ queryKey: ["matches"], queryFn: getMatches, staleTime: 15_000 });
+  const availableMatches =
+    matchesQuery.data?.data && matchesQuery.data.data.length > 0
+      ? matchesQuery.data.data
+      : DATASETS.map((d) => ({
+          match_id: d.id === 1 ? "metrica_game1" : "metrica_game2",
+          label: d.label,
+          fps: 25,
+          frame_count: 1500,
+          events_available: true,
+          tracking_available: true,
+        }));
+
+  const isVideo = matchId.startsWith("uploaded_") || matchId.startsWith("video_");
+  const currentMatch = availableMatches.find((m) => m.match_id === matchId);
+  const maxMatchFrames = currentMatch ? Math.max(1, currentMatch.frame_count) : 1500;
+  const windowStart = isVideo ? 0 : 1000;
+  const windowEnd = isVideo ? maxMatchFrames : 1500;
 
   useEffect(() => {
     if (!playing) return;
     const id = setInterval(
-      () => setFrame(Math.min(1500, frame + Math.max(1, Math.round(speed * 2)))),
+      () => setFrame(Math.min(windowEnd, frame + Math.max(1, Math.round(speed * 2)))),
       80 / speed,
     );
     return () => clearInterval(id);
-  }, [playing, speed, frame, setFrame]);
+  }, [playing, speed, frame, setFrame, windowEnd]);
 
-  const windowStart = 1000;
-  const windowEnd = 1500;
-  const pct = (f: number) => ((f - windowStart) / (windowEnd - windowStart)) * 100;
+  const pct = (f: number) =>
+    Math.min(100, Math.max(0, ((f - windowStart) / Math.max(1, windowEnd - windowStart)) * 100));
 
   return (
     <>
@@ -80,16 +99,20 @@ function MatchExplorer() {
       <Panel className="mb-4" bodyClassName="p-2.5">
         <div className="flex flex-wrap items-center gap-3">
           <select
-            value={dataset}
+            value={matchId}
             onChange={(e) => {
-              setDataset(e.target.value);
-              setMatchId(e.target.value.includes("Game_2") ? "metrica_game2" : "metrica_game1");
+              const selected = availableMatches.find((m) => m.match_id === e.target.value);
+              if (selected) {
+                setMatchId(selected.match_id);
+                setDataset(selected.label);
+                setFrame(isVideo ? 0 : 1250);
+              }
             }}
             className="border border-input bg-panel-alt px-2 py-1 text-[12px]"
           >
-            {DATASETS.map((d) => (
-              <option key={d.id} value={d.label}>
-                {d.label}
+            {availableMatches.map((m) => (
+              <option key={m.match_id} value={m.match_id}>
+                {m.label} ({m.frame_count} frames)
               </option>
             ))}
           </select>
