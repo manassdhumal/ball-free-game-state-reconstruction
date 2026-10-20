@@ -4,6 +4,7 @@ import {
   Link,
   createRootRouteWithContext,
   useRouter,
+  useRouterState,
   HeadContent,
   Scripts,
 } from "@tanstack/react-router";
@@ -118,19 +119,27 @@ function RootShell({ children }: { children: ReactNode }) {
 
 function RootComponent() {
   const { queryClient } = Route.useRouteContext();
+  const routerState = useRouterState();
+  const isLandingPage = routerState.location.pathname === "/";
 
   return (
     <QueryClientProvider client={queryClient}>
       <SessionProvider>
-        <div className="flex h-screen overflow-hidden bg-background">
-          <Sidebar />
-          <div className="flex min-w-0 flex-1 flex-col">
-            <TopBar />
-            <main className="flex-1 overflow-y-auto p-4">
-              <Outlet />
-            </main>
+        {isLandingPage ? (
+          <div className="min-h-screen bg-background text-foreground overflow-y-auto">
+            <Outlet />
           </div>
-        </div>
+        ) : (
+          <div className="flex h-screen overflow-hidden bg-background">
+            <Sidebar />
+            <div className="flex min-w-0 flex-1 flex-col">
+              <TopBar />
+              <main className="flex-1 overflow-y-auto p-4">
+                <Outlet />
+              </main>
+            </div>
+          </div>
+        )}
       </SessionProvider>
     </QueryClientProvider>
   );

@@ -58,7 +58,10 @@ export function TopBar() {
   return (
     <header className="flex h-12 shrink-0 items-stretch border-b border-border bg-panel">
       <Field label="Dataset" value={dataset} />
-      <Field label="Experiment" value="Controlled Analysis · EXP_080A_042" />
+      <Field
+        label="Mode"
+        value={isVideoMatch ? "Video Perception Reconstruction" : "Metrica Benchmark Tracking"}
+      />
       <Field label="Frame" value={`${frame} · ${stamp} · ${fps} FPS`} />
       <Field
         label="Backend"
@@ -69,7 +72,10 @@ export function TopBar() {
         <Field label="GSR Studio" value={gsrValue} tone={gsrTone} />
       </Link>
       <div className="flex flex-1 items-center justify-end px-4">
-        <span className="label-xs">Read-only research session</span>
+        <span className="label-xs flex items-center gap-1.5 font-medium text-emerald-400">
+          <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
+          Tactical Engine Active
+        </span>
       </div>
     </header>
   );
