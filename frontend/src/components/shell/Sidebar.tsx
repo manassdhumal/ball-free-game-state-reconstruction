@@ -57,17 +57,17 @@ export function Sidebar() {
     <aside className="flex w-64 shrink-0 flex-col border-r border-border bg-panel-alt">
       {/* Brand Header */}
       <div className="border-b border-border px-4 py-3.5 flex items-center justify-between">
-        <div>
-          <div className="flex items-center gap-2">
-            <div className="h-6 w-6 rounded bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400">
-              <Zap className="h-3.5 w-3.5" />
-            </div>
-            <span className="text-[12px] font-bold tracking-[0.06em] text-foreground">
-              BALL-FREE AI
-            </span>
+        <Link to="/" className="group flex items-center gap-2.5 cursor-pointer" title="Go to Product Landing Page">
+          <div className="h-7 w-7 rounded-md bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400 group-hover:border-emerald-300 transition-colors">
+            <Zap className="h-4 w-4" />
           </div>
-          <div className="label-xs mt-1 text-[9.5px]">Football Vision Intelligence</div>
-        </div>
+          <div>
+            <div className="text-[12.5px] font-bold tracking-[0.06em] text-foreground group-hover:text-emerald-400 transition-colors leading-tight">
+              BALL-FREE AI
+            </div>
+            <div className="label-xs text-[9px] text-muted-foreground">Tactical Vision Suite</div>
+          </div>
+        </Link>
         <Link
           to="/"
           className="text-muted-foreground hover:text-foreground text-[11px] flex items-center gap-1 border border-border px-2 py-0.5 rounded hover:bg-muted/40 transition-colors"

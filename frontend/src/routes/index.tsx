@@ -21,6 +21,11 @@ import {
   Activity,
   Maximize2,
   ChevronRight,
+  Gauge,
+  Waves,
+  Wrench,
+  FlaskConical,
+  AlertTriangle,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { Pitch, PitchLegend } from "@/components/Pitch";
@@ -598,6 +603,233 @@ export function ProductLandingPage() {
                 </Link>
               </div>
             </div>
+          </div>
+        </div>
+      </section>
+
+      {/* ------------------------------------------------------------------- */}
+      {/* Dedicated Specialized Views & Diagnostics Directory                 */}
+      {/* ------------------------------------------------------------------- */}
+      <section className="py-16 border-b border-border/60">
+        <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
+          <div className="text-center max-w-2xl mx-auto mb-10">
+            <div className="label-xs text-emerald-400 font-semibold">Specialized Deep Dives</div>
+            <h2 className="text-2xl sm:text-3xl font-bold tracking-tight text-foreground mt-1">
+              Explore All Dedicated Analysis Views
+            </h2>
+            <p className="text-xs sm:text-sm text-muted-foreground mt-2">
+              Every tactical calculation, degradation stress test, and filtering benchmark is isolated in its own dedicated workstation page for in-depth inspection.
+            </p>
+          </div>
+
+          <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3.5">
+            {/* Game State Radar */}
+            <Link
+              to="/game-state"
+              className="group border border-border bg-panel p-4 rounded-xl hover:border-emerald-500/50 hover:bg-panel-alt/60 transition-all flex flex-col justify-between"
+            >
+              <div>
+                <div className="flex items-center justify-between mb-2.5">
+                  <div className="h-8 w-8 rounded bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400 group-hover:scale-110 transition-transform">
+                    <Grid3x3 className="h-4 w-4" />
+                  </div>
+                  <span className="text-[10px] font-mono text-muted-foreground group-hover:text-emerald-400 flex items-center gap-1">
+                    Open <ArrowRight className="h-2.5 w-2.5" />
+                  </span>
+                </div>
+                <h4 className="text-sm font-bold text-foreground group-hover:text-emerald-400 transition-colors">
+                  Game State Radar
+                </h4>
+                <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
+                  Convex hulls, team compactness, centroids, and Voronoi territorial partitioning.
+                </p>
+              </div>
+              <div className="mt-3 pt-2 border-t border-border/60 text-[10.5px] font-mono text-emerald-400/80">
+                Spatial Control & Boundaries
+              </div>
+            </Link>
+
+            {/* Possession & Events */}
+            <Link
+              to="/possession"
+              className="group border border-border bg-panel p-4 rounded-xl hover:border-teal-500/50 hover:bg-panel-alt/60 transition-all flex flex-col justify-between"
+            >
+              <div>
+                <div className="flex items-center justify-between mb-2.5">
+                  <div className="h-8 w-8 rounded bg-teal-500/10 border border-teal-500/30 flex items-center justify-center text-teal-400 group-hover:scale-110 transition-transform">
+                    <Timer className="h-4 w-4" />
+                  </div>
+                  <span className="text-[10px] font-mono text-muted-foreground group-hover:text-teal-400 flex items-center gap-1">
+                    Open <ArrowRight className="h-2.5 w-2.5" />
+                  </span>
+                </div>
+                <h4 className="text-sm font-bold text-foreground group-hover:text-teal-400 transition-colors">
+                  Possession & Transitions
+                </h4>
+                <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
+                  Ball-free possession inference, spell durations, and transition event detection.
+                </p>
+              </div>
+              <div className="mt-3 pt-2 border-t border-border/60 text-[10.5px] font-mono text-teal-400/80">
+                Event Timeline & Dominance
+              </div>
+            </Link>
+
+            {/* 3-Tier Benchmark */}
+            <Link
+              to="/benchmark"
+              className="group border border-border bg-panel p-4 rounded-xl hover:border-cyan-500/50 hover:bg-panel-alt/60 transition-all flex flex-col justify-between"
+            >
+              <div>
+                <div className="flex items-center justify-between mb-2.5">
+                  <div className="h-8 w-8 rounded bg-cyan-500/10 border border-cyan-500/30 flex items-center justify-center text-cyan-400 group-hover:scale-110 transition-transform">
+                    <Gauge className="h-4 w-4" />
+                  </div>
+                  <span className="text-[10px] font-mono text-muted-foreground group-hover:text-cyan-400 flex items-center gap-1">
+                    Open <ArrowRight className="h-2.5 w-2.5" />
+                  </span>
+                </div>
+                <h4 className="text-sm font-bold text-foreground group-hover:text-cyan-400 transition-colors">
+                  3-Tier Benchmark
+                </h4>
+                <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
+                  Comparative performance across Clean GT, Degraded Synthetic, and Live Video.
+                </p>
+              </div>
+              <div className="mt-3 pt-2 border-t border-border/60 text-[10.5px] font-mono text-cyan-400/80">
+                Cross-Tier Validation
+              </div>
+            </Link>
+
+            {/* Noise & Degradation Lab */}
+            <Link
+              to="/noise-lab"
+              className="group border border-border bg-panel p-4 rounded-xl hover:border-amber-500/50 hover:bg-panel-alt/60 transition-all flex flex-col justify-between"
+            >
+              <div>
+                <div className="flex items-center justify-between mb-2.5">
+                  <div className="h-8 w-8 rounded bg-amber-500/10 border border-amber-500/30 flex items-center justify-center text-amber-400 group-hover:scale-110 transition-transform">
+                    <Waves className="h-4 w-4" />
+                  </div>
+                  <span className="text-[10px] font-mono text-muted-foreground group-hover:text-amber-400 flex items-center gap-1">
+                    Open <ArrowRight className="h-2.5 w-2.5" />
+                  </span>
+                </div>
+                <h4 className="text-sm font-bold text-foreground group-hover:text-amber-400 transition-colors">
+                  Noise & Degradation Lab
+                </h4>
+                <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
+                  Inject synthetic dropouts, ID swaps, and coordinate jitter to stress-test resilience.
+                </p>
+              </div>
+              <div className="mt-3 pt-2 border-t border-border/60 text-[10.5px] font-mono text-amber-400/80">
+                Parametric Stress Testing
+              </div>
+            </Link>
+
+            {/* Recovery & Filtering Lab */}
+            <Link
+              to="/recovery"
+              className="group border border-border bg-panel p-4 rounded-xl hover:border-emerald-500/50 hover:bg-panel-alt/60 transition-all flex flex-col justify-between"
+            >
+              <div>
+                <div className="flex items-center justify-between mb-2.5">
+                  <div className="h-8 w-8 rounded bg-emerald-500/10 border border-emerald-500/30 flex items-center justify-center text-emerald-400 group-hover:scale-110 transition-transform">
+                    <Wrench className="h-4 w-4" />
+                  </div>
+                  <span className="text-[10px] font-mono text-muted-foreground group-hover:text-emerald-400 flex items-center gap-1">
+                    Open <ArrowRight className="h-2.5 w-2.5" />
+                  </span>
+                </div>
+                <h4 className="text-sm font-bold text-foreground group-hover:text-emerald-400 transition-colors">
+                  Recovery & Filtering
+                </h4>
+                <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
+                  Savitzky-Golay polynomial smoothing and linear interpolation benchmarks (+0.178 F1).
+                </p>
+              </div>
+              <div className="mt-3 pt-2 border-t border-border/60 text-[10.5px] font-mono text-emerald-400/80">
+                Mitigation Verification
+              </div>
+            </Link>
+
+            {/* Tracking Quality Diagnostics */}
+            <Link
+              to="/tracking-quality"
+              className="group border border-border bg-panel p-4 rounded-xl hover:border-blue-500/50 hover:bg-panel-alt/60 transition-all flex flex-col justify-between"
+            >
+              <div>
+                <div className="flex items-center justify-between mb-2.5">
+                  <div className="h-8 w-8 rounded bg-blue-500/10 border border-blue-500/30 flex items-center justify-center text-blue-400 group-hover:scale-110 transition-transform">
+                    <Activity className="h-4 w-4" />
+                  </div>
+                  <span className="text-[10px] font-mono text-muted-foreground group-hover:text-blue-400 flex items-center gap-1">
+                    Open <ArrowRight className="h-2.5 w-2.5" />
+                  </span>
+                </div>
+                <h4 className="text-sm font-bold text-foreground group-hover:text-blue-400 transition-colors">
+                  Tracking Quality
+                </h4>
+                <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
+                  Track continuity, fragment rates, occlusion handling, and MOT identity switches.
+                </p>
+              </div>
+              <div className="mt-3 pt-2 border-t border-border/60 text-[10.5px] font-mono text-blue-400/80">
+                Perception Quality Metrics
+              </div>
+            </Link>
+
+            {/* Controlled Experiments Matrix */}
+            <Link
+              to="/experiments"
+              className="group border border-border bg-panel p-4 rounded-xl hover:border-purple-500/50 hover:bg-panel-alt/60 transition-all flex flex-col justify-between"
+            >
+              <div>
+                <div className="flex items-center justify-between mb-2.5">
+                  <div className="h-8 w-8 rounded bg-purple-500/10 border border-purple-500/30 flex items-center justify-center text-purple-400 group-hover:scale-110 transition-transform">
+                    <FlaskConical className="h-4 w-4" />
+                  </div>
+                  <span className="text-[10px] font-mono text-muted-foreground group-hover:text-purple-400 flex items-center gap-1">
+                    Open <ArrowRight className="h-2.5 w-2.5" />
+                  </span>
+                </div>
+                <h4 className="text-sm font-bold text-foreground group-hover:text-purple-400 transition-colors">
+                  Controlled Experiments
+                </h4>
+                <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
+                  Systematic 60-run parameter evaluation grid with confidence bounds and variance.
+                </p>
+              </div>
+              <div className="mt-3 pt-2 border-t border-border/60 text-[10.5px] font-mono text-purple-400/80">
+                60-Run Empirical Matrix
+              </div>
+            </Link>
+
+            {/* System Limitations & Boundaries */}
+            <Link
+              to="/limitations"
+              className="group border border-border bg-panel p-4 rounded-xl hover:border-rose-500/50 hover:bg-panel-alt/60 transition-all flex flex-col justify-between"
+            >
+              <div>
+                <div className="flex items-center justify-between mb-2.5">
+                  <div className="h-8 w-8 rounded bg-rose-500/10 border border-rose-500/30 flex items-center justify-center text-rose-400 group-hover:scale-110 transition-transform">
+                    <AlertTriangle className="h-4 w-4" />
+                  </div>
+                  <span className="text-[10px] font-mono text-muted-foreground group-hover:text-rose-400 flex items-center gap-1">
+                    Open <ArrowRight className="h-2.5 w-2.5" />
+                  </span>
+                </div>
+                <h4 className="text-sm font-bold text-foreground group-hover:text-rose-400 transition-colors">
+                  System Boundaries
+                </h4>
+                <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
+                  Honest failure mode documentation: extreme camera angles, heavy crowd occlusions.
+                </p>
+              </div>
+              <div className="mt-3 pt-2 border-t border-border/60 text-[10.5px] font-mono text-rose-400/80">
+                Operational Boundaries
+              </div>
+            </Link>
           </div>
         </div>
       </section>

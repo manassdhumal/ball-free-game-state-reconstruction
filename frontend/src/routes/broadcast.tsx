@@ -1,5 +1,5 @@
 import { useState, useRef, useEffect } from "react";
-import { createFileRoute, useNavigate } from "@tanstack/react-router";
+import { createFileRoute, useNavigate, Link } from "@tanstack/react-router";
 import { 
   UploadCloud, 
   Play, 
@@ -15,7 +15,8 @@ import {
   RefreshCw,
   Sparkles,
   Crosshair,
-  RotateCcw
+  RotateCcw,
+  Zap
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { Panel, PageHeader } from "@/components/Panel";
@@ -46,15 +47,6 @@ export const Route = createFileRoute("/broadcast")({
   }),
   component: VideoReconstructionStudio,
 });
-
-const PIPELINE_MODULES = [
-  { name: "Frame Ingest", detail: "Video decode & frame buffering at native FPS", status: "Active" },
-  { name: "YOLOv8 Detection", detail: "Per-frame player & referee bounding boxes", status: "Active" },
-  { name: "ByteTrack Tracker", detail: "Multi-object identity association across frames", status: "Active" },
-  { name: "Jersey Classifier", detail: "K-Means color clustering into Home vs Away teams", status: "Active" },
-  { name: "Pitch Homography", detail: "Perspective transform to normalized 2D pitch coordinates", status: "Active" },
-  { name: "Ball-Free Engine", detail: "Spatial graph, heuristic possession & TAS evaluation", status: "Active" },
-];
 
 function VideoReconstructionStudio() {
   const navigate = useNavigate();
@@ -249,6 +241,39 @@ function VideoReconstructionStudio() {
 
   return (
     <>
+      {/* Top Brand Bar with Clickable Logo Returning to Landing Page */}
+      <div className="mb-4 flex items-center justify-between border-b border-border/80 pb-3">
+        <Link
+          to="/"
+          className="group flex items-center gap-2.5 cursor-pointer"
+          title="Return to Product Landing Page"
+        >
+          <div className="h-8 w-8 rounded-lg bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400 group-hover:border-emerald-300 group-hover:bg-emerald-500/30 transition-all shadow-sm">
+            <Zap className="h-4 w-4" />
+          </div>
+          <div>
+            <div className="text-sm font-bold tracking-[0.06em] text-foreground group-hover:text-emerald-400 transition-colors flex items-center gap-2">
+              BALL-FREE AI
+              <span className="text-[10px] font-medium font-mono text-emerald-400 border border-emerald-500/30 bg-emerald-500/10 px-1.5 py-0.5 rounded">
+                STUDIO PRO
+              </span>
+            </div>
+            <div className="text-[11px] text-muted-foreground flex items-center gap-1">
+              <span>← Click logo to return to Landing Page</span>
+            </div>
+          </div>
+        </Link>
+
+        <Link
+          to="/"
+          className="text-xs text-muted-foreground hover:text-emerald-400 border border-border/80 bg-panel px-3 py-1.5 rounded flex items-center gap-1.5 transition-colors"
+          title="Go to Product Landing Page"
+        >
+          <span>Landing Page Overview</span>
+          <ArrowRight className="h-3 w-3" />
+        </Link>
+      </div>
+
       <PageHeader
         title="Video Game State Reconstruction Studio"
         description="Upload a gameplay video clip to detect players, reconstruct pitch coordinates, and compute ball-free possession and Tactical Advantage Scores in real time."
@@ -588,24 +613,6 @@ function VideoReconstructionStudio() {
                 </div>
               </div>
             )}
-          </Panel>
-
-          {/* Active Architecture Modules */}
-          <Panel title="Vision Perception Architecture" subtitle="All 6 perception stages operational">
-            <div className="grid gap-2 sm:grid-cols-2 md:grid-cols-3 text-xs">
-              {PIPELINE_MODULES.map((m, i) => (
-                <div key={m.name} className="border border-border bg-panel-alt p-2 rounded">
-                  <div className="flex items-center justify-between">
-                    <span className="text-[10px] text-muted-foreground font-mono">Stage 0{i + 1}</span>
-                    <span className="flex items-center gap-1 text-[10px] text-emerald-400 font-medium">
-                      <CheckCircle2 className="h-3 w-3" /> {m.status}
-                    </span>
-                  </div>
-                  <div className="font-semibold text-xs mt-1">{m.name}</div>
-                  <div className="text-[11px] text-muted-foreground mt-0.5">{m.detail}</div>
-                </div>
-              ))}
-            </div>
           </Panel>
         </div>
       </div>
