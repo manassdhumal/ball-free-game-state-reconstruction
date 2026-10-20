@@ -8,6 +8,8 @@ import numpy as np
 import pandas as pd
 from ultralytics import YOLO
 
+from pathlib import Path
+
 from .homography import PitchHomography
 from .jersey_classifier import JerseyClassifier
 
@@ -19,7 +21,8 @@ class VideoGameStateTracker:
         self,
         model_name: str = "yolov8n.pt",
         homography: PitchHomography | None = None,
-        conf_threshold: float = 0.25,
+        conf_threshold: float = 0.20,
+        tracker_config: str | None = None,
     ) -> None:
         """Initialize the YOLO-based video tracker.
 
@@ -27,11 +30,17 @@ class VideoGameStateTracker:
             model_name: Ultralytics model weights file or identifier.
             homography: PitchHomography instance. If None, default normalized mapping is used.
             conf_threshold: Minimum detection confidence score.
+            tracker_config: Path to tracker YAML config. Defaults to configs/bytetrack_football.yaml if present.
         """
         self.model = YOLO(model_name)
         self.homography = homography or PitchHomography()
         self.conf_threshold = conf_threshold
         self.classifier = JerseyClassifier()
+        if tracker_config is not None:
+            self.tracker_config = tracker_config
+        else:
+            default_cfg = Path(__file__).resolve().parents[2] / "configs" / "bytetrack_football.yaml"
+            self.tracker_config = str(default_cfg) if default_cfg.exists() else "bytetrack.yaml"
 
     def process_video(
         self,
@@ -89,23 +98,32 @@ class VideoGameStateTracker:
                 frame_idx += 1
                 continue
 
-            # Run YOLO multi-object tracking (person class = 0)
-            results = self.model.track(
-                source=frame,
-                persist=True,
-                classes=[0],
-                conf=self.conf_threshold,
-                verbose=False,
-            )
+            track_kwargs: Dict[str, Any] = {
+                "source": frame,
+                "persist": True,
+                "classes": [0],
+                "conf": self.conf_threshold,
+                "verbose": False,
+            }
+            if self.tracker_config:
+                track_kwargs["tracker"] = self.tracker_config
+
+            results = self.model.track(**track_kwargs)
+
+            # Fallback for synthetic/drawn clips where COCO assigns non-person classes
+            if not results or results[0].boxes is None or len(results[0].boxes) == 0:
+                fallback_kwargs = dict(track_kwargs)
+                fallback_kwargs.pop("classes", None)
+                fallback_kwargs["conf"] = 0.10
+                results = self.model.track(**fallback_kwargs)
 
             if results and len(results) > 0 and results[0].boxes is not None:
                 boxes = results[0].boxes
-                for box in boxes:
-                    # Require a valid tracking ID
-                    if box.id is None:
-                        continue
-
-                    track_id = int(box.id[0].item())
+                for box_idx, box in enumerate(boxes):
+                    if box.id is not None:
+                        track_id = int(box.id[0].item())
+                    else:
+                        track_id = int(box_idx + 1)
                     conf = float(box.conf[0].item())
                     xyxy = box.xyxy[0].cpu().numpy()  # [x1, y1, x2, y2]
 
