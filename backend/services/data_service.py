@@ -114,6 +114,8 @@ def frame(match_id: str, frame_number: int) -> dict[str, Any]:
         import numpy as np
         avail = df["frame"].unique()
         closest_f = avail[np.abs(avail - frame_number).argmin()]
+        if abs(int(closest_f) - int(frame_number)) > 15:
+            raise IndexError(frame_number)
         rows = df[df["frame"] == closest_f]
     players = []
     for row in rows.itertuples(index=False):

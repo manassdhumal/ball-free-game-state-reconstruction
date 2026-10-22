@@ -1,6 +1,7 @@
 """Player team classification based on jersey color clustering."""
 
 from __future__ import annotations
+from collections import Counter, defaultdict
 from typing import Dict, List, Tuple, Any
 import numpy as np
 import cv2
@@ -84,10 +85,14 @@ class JerseyClassifier:
         self.team_colors[self.team_names[1]] = centers[1]
         self._fitted = True
 
-        # Cache initial player assignments
+        player_votes = defaultdict(list)
         for (p_id, _), label in zip(player_color_samples, labels.flatten()):
-            team = self.team_names[label]
-            self._player_team_cache[p_id] = team
+            player_votes[p_id].append(self.team_names[label])
+
+        # Cache majority-voted team assignments
+        for p_id, votes in player_votes.items():
+            most_common_team = Counter(votes).most_common(1)[0][0]
+            self._player_team_cache[p_id] = most_common_team
 
     def predict_team(self, player_id: str, color: np.ndarray | None) -> str:
         """Predict whether a player belongs to 'home' or 'away'."""
