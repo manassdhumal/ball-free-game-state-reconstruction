@@ -316,22 +316,46 @@ function VideoReconstructionStudio() {
       .then((res) => {
         if (res.frames) {
           const cache: Record<number, Player[]> = {};
-          for (const [fStr, players] of Object.entries(res.frames)) {
-            const fNum = Number(fStr);
-            cache[fNum] = (players || [])
+          const sortedFrames = Object.keys(res.frames).map(Number).sort((a, b) => a - b);
+          
+          for (const fNum of sortedFrames) {
+            const players = res.frames[fNum] || [];
+            const nextFramePlayers = res.frames[fNum + 1] || [];
+            const nextMap = new Map(nextFramePlayers.map((p) => [p.player_id, p]));
+
+            cache[fNum] = players
               .filter((p) => p.x !== null && p.y !== null)
-              .map((p, idx) => ({
-                id: p.player_id,
-                team: (p.team === "home" || p.team === "away" ? p.team : "home") as "home" | "away",
-                number: idx + 1,
-                name: p.player_id,
-                role: "Field",
-                x: (p.x ?? 0.5) * 105,
-                y: (p.y ?? 0.5) * 68,
-                vx: 0,
-                vy: 0,
-                visible: true,
-              }));
+              .map((p, idx) => {
+                const parts = p.player_id.split("_");
+                const playerNum = Number(parts[1]) || (idx + 1);
+                const curX = (p.x ?? 0.5) * 105;
+                const curY = (p.y ?? 0.5) * 68;
+
+                let vx = 0;
+                let vy = 0;
+                const nextP = nextMap.get(p.player_id);
+                if (nextP && nextP.x !== null && nextP.y !== null) {
+                  vx = ((nextP.x * 105) - curX) * 0.9;
+                  vy = ((nextP.y * 68) - curY) * 0.9;
+                  if (Math.hypot(vx, vy) < 0.20) {
+                    vx = 0;
+                    vy = 0;
+                  }
+                }
+
+                return {
+                  id: p.player_id,
+                  team: (p.team === "home" || p.team === "away" ? p.team : "home") as "home" | "away",
+                  number: playerNum,
+                  name: p.player_id,
+                  role: "Field",
+                  x: curX,
+                  y: curY,
+                  vx,
+                  vy,
+                  visible: true,
+                };
+              });
           }
           allFramesRef.current = cache;
           if (cache[currentFrame]) {
@@ -358,18 +382,22 @@ function VideoReconstructionStudio() {
       .then((res) => {
         const mapped: Player[] = (res.players || [])
           .filter((p) => p.x !== null && p.y !== null)
-          .map((p, idx) => ({
-            id: p.player_id,
-            team: (p.team === "home" || p.team === "away" ? p.team : "home") as "home" | "away",
-            number: idx + 1,
-            name: p.player_id,
-            role: "Field",
-            x: (p.x ?? 0.5) * 105,
-            y: (p.y ?? 0.5) * 68,
-            vx: 0,
-            vy: 0,
-            visible: true,
-          }));
+          .map((p, idx) => {
+            const parts = p.player_id.split("_");
+            const playerNum = Number(parts[1]) || (idx + 1);
+            return {
+              id: p.player_id,
+              team: (p.team === "home" || p.team === "away" ? p.team : "home") as "home" | "away",
+              number: playerNum,
+              name: p.player_id,
+              role: "Field",
+              x: (p.x ?? 0.5) * 105,
+              y: (p.y ?? 0.5) * 68,
+              vx: 0,
+              vy: 0,
+              visible: true,
+            };
+          });
         setFramePlayers(mapped);
       })
       .catch(() => {});

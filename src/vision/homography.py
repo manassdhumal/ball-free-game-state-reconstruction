@@ -381,32 +381,39 @@ class CameraMotionTracker:
                     # Estimate affine camera motion: translation (pan/tilt) and scale (zoom)
                     matrix, inliers = cv2.estimateAffinePartial2D(valid1, valid2, method=cv2.RANSAC)
                     if matrix is not None and inliers is not None and np.sum(inliers) >= 6:
-                        m3x3 = np.eye(3, dtype=np.float64)
-                        m3x3[:2, :] = matrix
-                        try:
-                            m_inv = np.linalg.inv(m3x3)
-                            # Update active homography: H_t = H_{t-1} @ M_inv
-                            updated_matrix = self.current_homography.matrix @ m_inv
-                            # Normalize projective scale to prevent matrix divergence
-                            if abs(updated_matrix[2, 2]) > 1e-7:
-                                updated_matrix /= updated_matrix[2, 2]
-                            self.current_homography = PitchHomography(updated_matrix)
-                        except np.linalg.LinAlgError:
+                        dx = float(matrix[0, 2])
+                        dy = float(matrix[1, 2])
+                        scale = float(np.hypot(matrix[0, 0], matrix[0, 1]))
+                        # Deadband filter: ignore sub-pixel camera micro-jitter
+                        if abs(dx) < 0.65 and abs(dy) < 0.50 and abs(scale - 1.0) < 0.006:
                             pass
+                        else:
+                            m3x3 = np.eye(3, dtype=np.float64)
+                            m3x3[:2, :] = matrix
+                            try:
+                                m_inv = np.linalg.inv(m3x3)
+                                # Update active homography: H_t = H_{t-1} @ M_inv
+                                updated_matrix = self.current_homography.matrix @ m_inv
+                                # Normalize projective scale to prevent matrix divergence
+                                if abs(updated_matrix[2, 2]) > 1e-7:
+                                    updated_matrix /= updated_matrix[2, 2]
+                                self.current_homography = PitchHomography(updated_matrix)
+                            except np.linalg.LinAlgError:
+                                pass
 
         # Smooth Pitch Landmark Calibration (Halfway line at X=0.50, Penalty D at X=0.192 or 0.808)
-        # Apply periodic drift calibration without abrupt matrix jumping
-        if self._frame_count % 3 == 0:
+        # Apply periodic drift calibration only on significant camera panning drift to prevent stationary jitter
+        if self._frame_count % 5 == 0:
             _grass, white_line_mask, pitch_contour = PitchMarkingDetector.extract_grass_and_lines(frame)
             half_line, half_conf = PitchMarkingDetector.detect_halfway_line(frame, white_line_mask, pitch_contour)
-            if half_line is not None and half_conf >= 0.40:
+            if half_line is not None and half_conf >= 0.50:
                 (pt_top, pt_bot) = half_line
                 mid_u = (pt_top[0] + pt_bot[0]) / 2.0
                 mid_v = (pt_top[1] + pt_bot[1]) / 2.0
                 proj_x, _ = self.current_homography.project_point(mid_u, mid_v)
                 err_x = 0.50 - proj_x
-                if abs(err_x) > 0.005:
-                    shift = float(np.clip(0.18 * err_x, -0.025, 0.025))
+                if abs(err_x) > 0.025:
+                    shift = float(np.clip(0.06 * err_x, -0.015, 0.015))
                     trans_mat = np.array([
                         [1.0, 0.0, shift],
                         [0.0, 1.0, 0.0],
@@ -418,13 +425,13 @@ class CameraMotionTracker:
                     self.current_homography = PitchHomography(new_mat)
             else:
                 d_line, d_conf = PitchMarkingDetector.detect_d_line(frame, white_line_mask, pitch_contour)
-                if d_line is not None and d_conf >= 0.40:
+                if d_line is not None and d_conf >= 0.50:
                     apex_u, apex_v = d_line["apex"]
                     proj_x, _ = self.current_homography.project_point(apex_u, apex_v)
                     target_x = 0.192 if d_line["side"] == "left" else 0.808
                     err_x = target_x - proj_x
-                    if abs(err_x) > 0.005:
-                        shift = float(np.clip(0.18 * err_x, -0.025, 0.025))
+                    if abs(err_x) > 0.025:
+                        shift = float(np.clip(0.06 * err_x, -0.015, 0.015))
                         trans_mat = np.array([
                             [1.0, 0.0, shift],
                             [0.0, 1.0, 0.0],

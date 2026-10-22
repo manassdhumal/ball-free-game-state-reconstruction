@@ -1,9 +1,9 @@
 # ByteTrack tracker configuration tuned for broadcast football tracking
 tracker_type: bytetrack
-track_high_thresh: 0.15
-track_low_thresh: 0.04
-new_track_thresh: 0.20
-track_buffer: 60
-match_thresh: 0.55
+track_high_thresh: 0.20
+track_low_thresh: 0.08
+new_track_thresh: 0.22
+track_buffer: 50
+match_thresh: 0.82
 fuse_score: True
 

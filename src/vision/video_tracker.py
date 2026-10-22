@@ -127,7 +127,8 @@ class VideoGameStateTracker:
 
             # High-resolution inference scale so small and distant outfield players are resolved
             inference_imgsz = max(960, min(1280, max(width, height)))
-            active_conf = min(self.conf_threshold, 0.08)
+            # Set tuned confidence threshold for person tracking (avoids partial torso false detections)
+            active_conf = max(0.12, min(self.conf_threshold, 0.22))
 
             track_kwargs: Dict[str, Any] = {
                 "source": frame,
@@ -146,7 +147,7 @@ class VideoGameStateTracker:
             if not results or results[0].boxes is None or len(results[0].boxes) < 4:
                 fallback_kwargs = dict(track_kwargs)
                 fallback_kwargs.pop("classes", None)
-                fallback_kwargs["conf"] = 0.06
+                fallback_kwargs["conf"] = 0.12
                 fallback_res = self.model.track(**fallback_kwargs)
                 if fallback_res and len(fallback_res) > 0 and fallback_res[0].boxes is not None:
                     if len(fallback_res[0].boxes) > (len(results[0].boxes) if results and results[0].boxes else 0):
@@ -162,22 +163,41 @@ class VideoGameStateTracker:
 
             if results and len(results) > 0 and results[0].boxes is not None:
                 boxes = results[0].boxes
+                # Parse and filter candidate boxes
+                candidates = []
                 for box_idx, box in enumerate(boxes):
-                    if box.id is not None:
-                        track_id = int(box.id[0].item())
-                    else:
-                        track_id = int(box_idx + 1)
+                    track_id = int(box.id[0].item()) if box.id is not None else int(box_idx + 1)
                     conf = float(box.conf[0].item())
                     xyxy = box.xyxy[0].cpu().numpy()  # [x1, y1, x2, y2]
-
                     w_box = float(xyxy[2] - xyxy[0])
                     h_box = float(xyxy[3] - xyxy[1])
-
-                    # Filter out severe non-human artifacts
                     min_h = max(6, int(height * 0.009))
                     if h_box < min_h or w_box < 3 or (w_box > 3.0 * h_box):
                         continue
+                    candidates.append((track_id, conf, xyxy))
 
+                # Suppress upper-body/torso duplicate detections (keep box that reaches feet on turf)
+                candidates.sort(key=lambda c: (c[2][3] - c[2][1]), reverse=True)
+                filtered_candidates = []
+                for cand in candidates:
+                    c_id, c_conf, c_xyxy = cand
+                    w_c = c_xyxy[2] - c_xyxy[0]
+                    h_c = c_xyxy[3] - c_xyxy[1]
+                    is_dup = False
+                    for kept in filtered_candidates:
+                        k_id, k_conf, k_xyxy = kept
+                        w_k = k_xyxy[2] - k_xyxy[0]
+                        inter_x = max(0.0, min(c_xyxy[2], k_xyxy[2]) - max(c_xyxy[0], k_xyxy[0]))
+                        min_w = min(w_c, w_k)
+                        if min_w > 0 and (inter_x / min_w) > 0.60:
+                            inter_y = max(0.0, min(c_xyxy[3], k_xyxy[3]) - max(c_xyxy[1], k_xyxy[1]))
+                            if h_c > 0 and (inter_y / h_c) > 0.65:
+                                is_dup = True
+                                break
+                    if not is_dup:
+                        filtered_candidates.append(cand)
+
+                for track_id, conf, xyxy in filtered_candidates:
                     # Foot contact point with persistent temporal EMA smoothing
                     u_raw = float((xyxy[0] + xyxy[2]) / 2.0)
                     v_raw = float(xyxy[3])
@@ -185,8 +205,8 @@ class VideoGameStateTracker:
 
                     if player_key in track_foot_smooth:
                         u_prev, v_prev = track_foot_smooth[player_key]
-                        u_foot = 0.70 * u_raw + 0.30 * u_prev
-                        v_foot = 0.70 * v_raw + 0.30 * v_prev
+                        u_foot = 0.50 * u_raw + 0.50 * u_prev
+                        v_foot = 0.50 * v_raw + 0.50 * v_prev
                     else:
                         u_foot = u_raw
                         v_foot = v_raw
@@ -416,17 +436,54 @@ class VideoGameStateTracker:
             if len(merged) < min_track_observations:
                 continue
 
-            # Savitzky-Golay smoothing along trajectory
-            x_arr = merged["x"].values.copy()
-            y_arr = merged["y"].values.copy()
+            # Physiological trajectory smoothing: clamp teleport jumps, smooth curves, anchor stationary players
+            x_c = merged["x"].values.copy()
+            y_c = merged["y"].values.copy()
             n_pts = len(merged)
 
-            if n_pts >= 7:
-                merged["x"] = np.clip(savgol_filter(x_arr, window_length=7, polyorder=2), 0.005, 0.995)
-                merged["y"] = np.clip(savgol_filter(y_arr, window_length=7, polyorder=2), 0.005, 0.995)
+            # 1. Clamp physiological speed jumps (> 10.5 m/s)
+            max_step_m = 10.5 / max(fps, 1.0)
+            for i in range(1, n_pts):
+                dx_m = (x_c[i] - x_c[i - 1]) * 105.0
+                dy_m = (y_c[i] - y_c[i - 1]) * 68.0
+                dist_m = float(np.hypot(dx_m, dy_m))
+                if dist_m > max_step_m:
+                    ratio = max_step_m / dist_m
+                    x_c[i] = x_c[i - 1] + (dx_m * ratio) / 105.0
+                    y_c[i] = y_c[i - 1] + (dy_m * ratio) / 68.0
+
+            # 2. Savitzky-Golay polynomial trajectory smoothing
+            w = min(9, n_pts if n_pts % 2 == 1 else n_pts - 1)
+            if w >= 5:
+                x_smooth = savgol_filter(x_c, window_length=w, polyorder=2)
+                y_smooth = savgol_filter(y_c, window_length=w, polyorder=2)
             elif n_pts >= 3:
-                merged["x"] = np.clip(merged["x"].rolling(3, min_periods=1, center=True).mean(), 0.005, 0.995)
-                merged["y"] = np.clip(merged["y"].rolling(3, min_periods=1, center=True).mean(), 0.005, 0.995)
+                x_smooth = np.convolve(x_c, np.ones(3) / 3.0, mode="same")
+                y_smooth = np.convolve(y_c, np.ones(3) / 3.0, mode="same")
+            else:
+                x_smooth = x_c
+                y_smooth = y_c
+
+            # 3. Stationary Deadband Anchor (0.35m hysteresis eliminates micro-jitter when standing still)
+            anchor_x = float(x_smooth[0])
+            anchor_y = float(y_smooth[0])
+            x_out = x_smooth.copy()
+            y_out = y_smooth.copy()
+            for i in range(n_pts):
+                dx_m = (x_smooth[i] - anchor_x) * 105.0
+                dy_m = (y_smooth[i] - anchor_y) * 68.0
+                dist_m = float(np.hypot(dx_m, dy_m))
+                if dist_m < 0.35:
+                    x_out[i] = anchor_x
+                    y_out[i] = anchor_y
+                else:
+                    anchor_x = float(x_smooth[i])
+                    anchor_y = float(y_smooth[i])
+                    x_out[i] = anchor_x
+                    y_out[i] = anchor_y
+
+            merged["x"] = np.clip(x_out, 0.005, 0.995)
+            merged["y"] = np.clip(y_out, 0.005, 0.995)
 
             records.append(merged)
 
