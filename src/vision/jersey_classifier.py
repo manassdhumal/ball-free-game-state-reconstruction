@@ -180,31 +180,22 @@ class JerseyClassifier:
         self._fitted = True
 
         # Identify referee outliers and assign outfield players
+        # Outfield players and goalkeepers must be preserved; only explicit fluorescent referee kits are excluded
         for p_id, p_lab, p_rgb, p_label in zip(unique_players, player_labs, player_rgbs, labels):
             dist_0 = float(np.linalg.norm(p_lab - self._team_lab_centers[self.team_names[0]]))
             dist_1 = float(np.linalg.norm(p_lab - self._team_lab_centers[self.team_names[1]]))
             min_dist = min(dist_0, dist_1)
 
-            # Check if this player is a referee:
-            # 1. Falls in an outlier 3rd cluster (not c0 or c1)
-            # 2. Or color distance to both teams is high (ΔE >= 18.0)
-            # 3. Or distinctive referee uniform colors (neon yellow, pink, turquoise, all black)
             is_ref = False
-            if k_clusters >= 3 and p_label not in (c0_idx, c1_idx):
-                is_ref = True
-            elif min_dist >= 18.0:
-                is_ref = True
-            elif (p_rgb[0] > 135 and p_rgb[1] > 155 and p_rgb[2] < 95 and (p_rgb[1] - p_rgb[2]) > 55):
+            # Only genuine referee kit signatures (high fluorescence neon lime, magenta, turquoise)
+            if (p_rgb[0] > 140 and p_rgb[1] > 165 and p_rgb[2] < 80 and (p_rgb[1] - p_rgb[2]) > 70):
                 # Fluorescent neon yellow / lime referee kit
                 is_ref = True
-            elif (p_rgb[0] > 150 and p_rgb[1] < 100 and p_rgb[2] > 95):
+            elif (p_rgb[0] > 170 and p_rgb[1] < 80 and p_rgb[2] > 120):
                 # Fluorescent pink / magenta referee kit
                 is_ref = True
-            elif (p_rgb[0] < 75 and p_rgb[1] > 140 and p_rgb[2] > 150):
+            elif (p_rgb[0] < 50 and p_rgb[1] > 160 and p_rgb[2] > 170):
                 # Bright cyan / turquoise referee kit
-                is_ref = True
-            elif (p_rgb[0] < 65 and p_rgb[1] < 65 and p_rgb[2] < 65 and min_dist >= 14.0):
-                # Traditional all-black referee kit
                 is_ref = True
 
             if is_ref:
@@ -221,20 +212,12 @@ class JerseyClassifier:
         if self._player_team_cache.get(str(player_id)) == "referee":
             return True
         if self._fitted and color is not None:
-            color_lab = self._rgb_to_lab(color)
-            dist_0 = float(np.linalg.norm(color_lab - self._team_lab_centers[self.team_names[0]]))
-            dist_1 = float(np.linalg.norm(color_lab - self._team_lab_centers[self.team_names[1]]))
-            min_dist = min(dist_0, dist_1)
-            if min_dist >= 18.0:
+            # Check distinctive fluorescent referee kit colors
+            if color[0] > 140 and color[1] > 165 and color[2] < 80 and (color[1] - color[2]) > 70:
                 return True
-            # Check distinctive referee kit colors
-            if color[0] > 135 and color[1] > 155 and color[2] < 95 and (color[1] - color[2]) > 55:
+            if color[0] > 170 and color[1] < 80 and color[2] > 120:
                 return True
-            if color[0] > 150 and color[1] < 100 and color[2] > 95:
-                return True
-            if color[0] < 75 and color[1] > 140 and color[2] > 150:
-                return True
-            if color[0] < 65 and color[1] < 65 and color[2] < 65 and min_dist >= 14.0:
+            if color[0] < 50 and color[1] > 160 and color[2] > 170:
                 return True
         return False
 

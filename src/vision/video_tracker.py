@@ -125,10 +125,10 @@ class VideoGameStateTracker:
             grass_mask, _white_lines, pitch_contour = PitchMarkingDetector.extract_grass_and_lines(frame)
             has_grass = bool(np.mean(grass_mask > 0) > 0.08)
 
-            # High-resolution inference scale so small and distant outfield players are resolved
-            inference_imgsz = max(960, min(1280, max(width, height)))
-            # Set tuned confidence threshold for person tracking (avoids partial torso false detections)
-            active_conf = max(0.12, min(self.conf_threshold, 0.22))
+            # Native model resolution (640) guarantees accurate feature maps without bilinear blurring artifacts
+            inference_imgsz = 640
+            # Set tuned confidence threshold for person tracking (high recall for all outfield players)
+            active_conf = max(0.06, min(self.conf_threshold, 0.15))
 
             track_kwargs: Dict[str, Any] = {
                 "source": frame,
@@ -314,8 +314,8 @@ class VideoGameStateTracker:
         df: pd.DataFrame,
         total_frames: int,
         fps: float = 25.0,
-        max_interpolation_gap: int = 25,
-        min_track_observations: int = 5,
+        max_interpolation_gap: int = 40,
+        min_track_observations: int = 2,
     ) -> pd.DataFrame:
         """Densely complete player trajectories across intermediate frames and smooth movements.
 
