@@ -138,8 +138,7 @@ def gsr_status():
 
 
 # ---------------------------------------------------------------------------
-# Video Upload & Processing Endpoints
-# ---------------------------------------------------------------------------
+from typing import Any, Optional
 import os
 import shutil
 import uuid
@@ -158,11 +157,14 @@ VIDEO_PROGRESS: dict[str, dict[str, Any]] = {}
 
 class ProcessVideoRequest(BaseModel):
     video_id: str
-    preset: str = "main_broadcast"
-    max_frames: int = 150
+    preset: str = "auto_detect"
+    max_frames: Optional[int] = 375
     frame_stride: int = 1
+    conf_threshold: float = 0.18
     apply_mitigation: bool = True
     custom_corners: Optional[list[list[float]]] = None
+
+ProcessVideoRequest.model_rebuild()
 
 
 @router.post("/video/upload")
@@ -178,7 +180,24 @@ async def upload_video(file: UploadFile = File(...)):
         shutil.copyfileobj(file.file, buffer)
 
     size = os.path.getsize(dest_path)
-    VIDEO_PROGRESS[video_id] = {"progress": 0.0, "status": "Uploaded, ready for analysis"}
+
+    # Read video properties with OpenCV
+    import cv2
+    cap = cv2.VideoCapture(str(dest_path))
+    total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT)) if cap.isOpened() else 0
+    fps = float(cap.get(cv2.CAP_PROP_FPS) or 25.0) if cap.isOpened() else 25.0
+    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH)) if cap.isOpened() else 1280
+    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT)) if cap.isOpened() else 720
+    cap.release()
+    duration_sec = round(total_frames / max(fps, 1.0), 2)
+
+    VIDEO_PROGRESS[video_id] = {
+        "progress": 0.0,
+        "status": "Uploaded, ready for analysis",
+        "completed": False,
+        "error": None,
+        "data": None,
+    }
 
     return {
         "status": "uploaded",
@@ -186,12 +205,17 @@ async def upload_video(file: UploadFile = File(...)):
         "filename": file.filename,
         "size_bytes": size,
         "match_id": f"uploaded_{video_id}",
+        "total_frames": total_frames,
+        "fps": fps,
+        "width": width,
+        "height": height,
+        "duration_sec": duration_sec,
     }
 
 
 @router.post("/video/sample-demo")
-def sample_demo():
-    """Immediately processes the bundled sample football clip."""
+def sample_demo(background_tasks: BackgroundTasks):
+    """Processes the bundled sample football clip as a background task."""
     sample_file = Path(__file__).resolve().parents[2] / "data" / "samples" / "sample_match_clip.mp4"
     if not sample_file.exists():
         raise HTTPException(status_code=404, detail="Sample match video not found on disk.")
@@ -202,63 +226,159 @@ def sample_demo():
         shutil.copyfile(sample_file, dest_video)
 
     match_id = f"uploaded_{demo_id}"
-    VIDEO_PROGRESS[demo_id] = {"progress": 0.1, "status": "Processing bundled match clip"}
+    VIDEO_PROGRESS[demo_id] = {
+        "progress": 0.05,
+        "status": "Initializing demo clip tracking...",
+        "completed": False,
+        "error": None,
+        "data": None,
+    }
 
-    def progress_callback(ratio: float, msg: str):
-        VIDEO_PROGRESS[demo_id] = {"progress": round(ratio, 2), "status": msg}
+    def run_sample_pipeline():
+        try:
+            def progress_callback(ratio: float, msg: str):
+                VIDEO_PROGRESS[demo_id] = {
+                    "progress": round(ratio, 2),
+                    "status": msg,
+                    "completed": False,
+                    "error": None,
+                    "data": None,
+                }
 
-    pipeline = VideoAnalysisPipeline(homography_preset="main_broadcast")
-    result = pipeline.analyze_video(
-        video_path=str(dest_video),
-        match_id=match_id,
-        max_frames=120,
-        frame_stride=1,
-        apply_mitigation=True,
-        progress_callback=progress_callback,
-    )
+            pipeline = VideoAnalysisPipeline(homography_preset="main_broadcast")
+            result = pipeline.analyze_video(
+                video_path=str(dest_video),
+                match_id=match_id,
+                max_frames=120,
+                frame_stride=1,
+                apply_mitigation=True,
+                progress_callback=progress_callback,
+            )
 
-    data.tracking.cache_clear()
-    return {"status": "success", "video_id": demo_id, "match_id": match_id, "data": result}
+            data.tracking.cache_clear()
+            VIDEO_PROGRESS[demo_id] = {
+                "progress": 1.0,
+                "status": "Demo game state reconstructed!",
+                "completed": True,
+                "error": None,
+                "data": {
+                    "status": "success",
+                    "video_id": demo_id,
+                    "match_id": match_id,
+                    "data": result,
+                },
+            }
+        except Exception as exc:
+            import traceback
+            traceback.print_exc()
+            VIDEO_PROGRESS[demo_id] = {
+                "progress": 0.0,
+                "status": "Failed to run sample demo.",
+                "completed": True,
+                "error": str(exc),
+                "data": None,
+            }
+
+    background_tasks.add_task(run_sample_pipeline)
+
+    return {
+        "status": "processing",
+        "video_id": demo_id,
+        "match_id": match_id,
+        "message": "Demo perception pipeline queued in background.",
+    }
 
 
 @router.post("/video/process")
-def process_video(req: ProcessVideoRequest):
-    # Locate video file
+def process_video(req: ProcessVideoRequest, background_tasks: BackgroundTasks):
     matching = list(UPLOAD_DIR.glob(f"{req.video_id}.*"))
     if not matching:
         raise HTTPException(status_code=404, detail=f"Video ID not found: {req.video_id}")
     video_path = matching[0]
 
     match_id = f"uploaded_{req.video_id}"
-    VIDEO_PROGRESS[req.video_id] = {"progress": 0.05, "status": "Initializing tracking"}
+    VIDEO_PROGRESS[req.video_id] = {
+        "progress": 0.05,
+        "status": "Initializing video tracker and YOLO weights...",
+        "completed": False,
+        "error": None,
+        "data": None,
+    }
 
-    def progress_callback(ratio: float, msg: str):
-        VIDEO_PROGRESS[req.video_id] = {"progress": round(ratio, 2), "status": msg}
+    def run_pipeline():
+        try:
+            def progress_callback(ratio: float, msg: str):
+                VIDEO_PROGRESS[req.video_id] = {
+                    "progress": round(ratio, 2),
+                    "status": msg,
+                    "completed": False,
+                    "error": None,
+                    "data": None,
+                }
 
-    from src.vision.homography import PitchHomography
-    pipeline = VideoAnalysisPipeline(homography_preset=req.preset)
-    if req.custom_corners and len(req.custom_corners) == 4:
-        pipeline.homography = PitchHomography.from_four_points(req.custom_corners)
+            from src.vision.homography import PitchHomography
+            pipeline = VideoAnalysisPipeline(
+                homography_preset=req.preset,
+                conf_threshold=req.conf_threshold,
+            )
+            if req.custom_corners and len(req.custom_corners) == 4:
+                pipeline.homography = PitchHomography.from_four_points(req.custom_corners)
 
-    result = pipeline.analyze_video(
-        video_path=str(video_path),
-        match_id=match_id,
-        max_frames=req.max_frames,
-        frame_stride=req.frame_stride,
-        apply_mitigation=req.apply_mitigation,
-        progress_callback=progress_callback,
-    )
+            max_frames_to_run = None if (req.max_frames is None or req.max_frames <= 0) else req.max_frames
+            result = pipeline.analyze_video(
+                video_path=str(video_path),
+                match_id=match_id,
+                max_frames=max_frames_to_run,
+                frame_stride=max(1, req.frame_stride),
+                apply_mitigation=req.apply_mitigation,
+                progress_callback=progress_callback,
+            )
 
-    # Invalidate tracking cache in data service
-    data.tracking.cache_clear()
+            # Invalidate tracking cache in data service
+            data.tracking.cache_clear()
 
-    return {"status": "success", "match_id": match_id, "data": result}
+            VIDEO_PROGRESS[req.video_id] = {
+                "progress": 1.0,
+                "status": "Game state reconstruction complete!",
+                "completed": True,
+                "error": None,
+                "data": {
+                    "status": "success",
+                    "match_id": match_id,
+                    "data": result,
+                },
+            }
+        except Exception as exc:
+            import traceback
+            traceback.print_exc()
+            VIDEO_PROGRESS[req.video_id] = {
+                "progress": 0.0,
+                "status": "Failed to process video.",
+                "completed": True,
+                "error": str(exc),
+                "data": None,
+            }
+
+    background_tasks.add_task(run_pipeline)
+
+    return {
+        "status": "processing",
+        "video_id": req.video_id,
+        "match_id": match_id,
+        "message": "Video perception pipeline queued in background.",
+    }
 
 
 @router.get("/video/status/{video_id}")
 def video_status(video_id: str):
     if video_id not in VIDEO_PROGRESS:
-        return {"progress": 0.0, "status": "idle"}
+        return {
+            "progress": 0.0,
+            "status": "idle",
+            "completed": False,
+            "error": None,
+            "data": None,
+        }
     return VIDEO_PROGRESS[video_id]
 
 

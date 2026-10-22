@@ -6,6 +6,11 @@ export interface VideoUploadResponse {
   filename: string;
   size_bytes: number;
   match_id: string;
+  total_frames?: number;
+  fps?: number;
+  width?: number;
+  height?: number;
+  duration_sec?: number;
 }
 
 export interface VideoProcessResponse {
@@ -15,6 +20,12 @@ export interface VideoProcessResponse {
     match_id: string;
     status: string;
     frame_count: number;
+    min_frame?: number;
+    max_frame?: number;
+    fps?: number;
+    duration_sec?: number;
+    frame_stride?: number;
+    total_video_frames?: number;
     tracking_rows: number;
     tracking_file: string;
     possession_share: { home: number; away: number };
@@ -31,22 +42,41 @@ export interface VideoProcessResponse {
 export interface VideoStatusResponse {
   progress: number;
   status: string;
+  completed?: boolean;
+  error?: string | null;
+  data?: VideoProcessResponse | null;
 }
 
 export async function uploadVideoFile(file: File): Promise<VideoUploadResponse> {
   const formData = new FormData();
   formData.append("file", file);
 
-  const response = await fetch(`${apiBaseUrl}/video/upload`, {
-    method: "POST",
-    body: formData,
-  });
+  try {
+    const response = await fetch(`${apiBaseUrl}/video/upload`, {
+      method: "POST",
+      body: formData,
+    });
 
-  if (!response.ok) {
-    throw new Error(`Upload failed with status ${response.status}`);
+    if (!response.ok) {
+      let detail = "";
+      try {
+        const json = await response.json();
+        detail = json.detail?.message || json.detail || JSON.stringify(json);
+      } catch {
+        detail = await response.text().catch(() => "");
+      }
+      throw new Error(`Upload failed (${response.status}): ${detail || response.statusText}`);
+    }
+
+    return response.json();
+  } catch (err: any) {
+    if (err.message && err.message.includes("Upload failed")) {
+      throw err;
+    }
+    throw new Error(
+      `Failed to upload video to server at ${apiBaseUrl}. Please verify backend is running on port 8000. (${err.message})`
+    );
   }
-
-  return response.json();
 }
 
 export function processVideo(params: {
@@ -54,25 +84,27 @@ export function processVideo(params: {
   preset?: string;
   max_frames?: number;
   frame_stride?: number;
+  conf_threshold?: number;
   apply_mitigation?: boolean;
   custom_corners?: Array<[number, number]>;
-}): Promise<VideoProcessResponse> {
-  return apiFetch<VideoProcessResponse>("/video/process", {
+}): Promise<{ status: string; video_id: string; match_id: string; message: string }> {
+  return apiFetch("/video/process", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({
       video_id: params.video_id,
-      preset: params.preset ?? "main_broadcast",
-      max_frames: params.max_frames ?? 150,
+      preset: params.preset ?? "auto_detect",
+      max_frames: params.max_frames ?? 375,
       frame_stride: params.frame_stride ?? 1,
+      conf_threshold: params.conf_threshold ?? 0.18,
       apply_mitigation: params.apply_mitigation ?? true,
       custom_corners: params.custom_corners,
     }),
   });
 }
 
-export function runSampleDemo(): Promise<VideoProcessResponse> {
-  return apiFetch<VideoProcessResponse>("/video/sample-demo", {
+export function runSampleDemo(): Promise<{ status: string; video_id: string; match_id: string; message: string }> {
+  return apiFetch("/video/sample-demo", {
     method: "POST",
   });
 }

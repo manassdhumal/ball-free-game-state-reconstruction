@@ -31,26 +31,27 @@ class JerseyClassifier:
 
         w = x2 - x1
         h = y2 - y1
-        if w < 6 or h < 12:
+        if w < 2 or h < 4:
             return None
 
-        # Torso region: vertically 15% to 50%, horizontally inner 20% to 80%
-        torso_y1 = y1 + int(0.15 * h)
-        torso_y2 = y1 + int(0.50 * h)
-        torso_x1 = x1 + int(0.20 * w)
-        torso_x2 = x1 + int(0.80 * w)
+        # Torso region: vertically 10% to 55%, horizontally inner 15% to 85%
+        torso_y1 = y1 + int(0.10 * h)
+        torso_y2 = max(torso_y1 + 1, y1 + int(0.55 * h))
+        torso_x1 = x1 + int(0.15 * w)
+        torso_x2 = max(torso_x1 + 1, x1 + int(0.85 * w))
 
         crop = frame[torso_y1:torso_y2, torso_x1:torso_x2]
+        if crop.size == 0:
+            crop = frame[y1:y2, x1:x2]
         if crop.size == 0:
             return None
 
         # Filter out green grass using HSV
         hsv = cv2.cvtColor(crop, cv2.COLOR_BGR2HSV)
-        # Green mask in OpenCV: H: 35-85, S: 40-255, V: 40-255
-        grass_mask = (hsv[:, :, 0] >= 35) & (hsv[:, :, 0] <= 85) & (hsv[:, :, 1] >= 40)
+        grass_mask = (hsv[:, :, 0] >= 30) & (hsv[:, :, 0] <= 88) & (hsv[:, :, 1] >= 35)
         non_grass_pixels = crop[~grass_mask]
 
-        if len(non_grass_pixels) < 10:
+        if len(non_grass_pixels) < 3:
             # Fallback to median color of the crop if mostly grass
             non_grass_pixels = crop.reshape(-1, 3)
 

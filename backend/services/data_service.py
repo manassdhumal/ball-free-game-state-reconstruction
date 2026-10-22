@@ -35,8 +35,8 @@ def _clean(value: Any) -> Any:
 
 
 def _paths(match_id: str) -> tuple[Path, Path, Path]:
-    if match_id.startswith("uploaded_") or match_id.startswith("video_"):
-        interim_csv = ROOT / "data" / "interim" / f"{match_id}_canonical_tracking.csv"
+    interim_csv = ROOT / "data" / "interim" / f"{match_id}_canonical_tracking.csv"
+    if interim_csv.exists() or match_id.startswith("uploaded_") or match_id.startswith("video_"):
         return interim_csv, interim_csv, interim_csv
     if not match_id.startswith("metrica_game"):
         raise KeyError(match_id)
@@ -51,11 +51,11 @@ def _paths(match_id: str) -> tuple[Path, Path, Path]:
 
 @lru_cache(maxsize=16)
 def tracking(match_id: str) -> pd.DataFrame:
-    if match_id.startswith("uploaded_") or match_id.startswith("video_"):
-        csv_path = ROOT / "data" / "interim" / f"{match_id}_canonical_tracking.csv"
-        if not csv_path.exists():
-            raise FileNotFoundError(f"Uploaded tracking file not found: {csv_path}")
-        return pd.read_csv(csv_path)
+    interim_csv = ROOT / "data" / "interim" / f"{match_id}_canonical_tracking.csv"
+    if interim_csv.exists() or match_id.startswith("uploaded_") or match_id.startswith("video_"):
+        if not interim_csv.exists():
+            raise FileNotFoundError(f"Uploaded tracking file not found: {interim_csv}")
+        return pd.read_csv(interim_csv)
     home, away, _ = _paths(match_id)
     players, _ball = load_metrica_match(str(home), str(away), match_id)
     return players
@@ -109,16 +109,26 @@ def frame(match_id: str, frame_number: int) -> dict[str, Any]:
     df = tracking(match_id)
     rows = df[df["frame"] == frame_number]
     if rows.empty:
-        raise IndexError(frame_number)
+        if df.empty:
+            raise IndexError(frame_number)
+        import numpy as np
+        avail = df["frame"].unique()
+        closest_f = avail[np.abs(avail - frame_number).argmin()]
+        rows = df[df["frame"] == closest_f]
     players = []
     for row in rows.itertuples(index=False):
+        pid = str(row.player_id)
+        if not pid.startswith(f"{str(row.team).upper()}_"):
+            pid = f"{str(row.team).upper()}_{pid}"
+        conf = getattr(row, "confidence", 1.0)
+        conf_val = 1.0 if pd.isna(conf) else float(conf)
         players.append({
-            "player_id": f"{str(row.team).upper()}_{row.player_id}",
+            "player_id": pid,
             "team": row.team,
             "x": None if pd.isna(row.x) else float(row.x),
             "y": None if pd.isna(row.y) else float(row.y),
-            "confidence": float(row.confidence),
-            "visible": bool(row.visible),
+            "confidence": conf_val,
+            "visible": bool(getattr(row, "visible", True)),
         })
     timestamp = float(rows["timestamp"].iloc[0])
     return {"match_id": match_id, "frame": frame_number, "timestamp": timestamp,

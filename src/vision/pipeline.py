@@ -24,8 +24,8 @@ class VideoAnalysisPipeline:
     def __init__(
         self,
         output_dir: str | Path = "data/interim",
-        homography_preset: str = "main_broadcast",
-        conf_threshold: float = 0.25,
+        homography_preset: str = "auto_detect",
+        conf_threshold: float = 0.18,
     ) -> None:
         self.output_dir = Path(output_dir)
         self.output_dir.mkdir(parents=True, exist_ok=True)
@@ -144,13 +144,26 @@ class VideoAnalysisPipeline:
         if progress_callback:
             progress_callback(1.0, "Analysis complete!")
 
+        min_f = int(tracking_df["frame"].min())
+        max_f = int(tracking_df["frame"].max())
+        meta = getattr(tracker, "metadata", {})
+        fps = meta.get("fps", 25.0)
+        total_vid_frames = meta.get("total_frames", max_f + 1)
+        dur = round(max_f / max(fps, 1.0), 2)
+
         return {
             "match_id": match_id,
             "status": "success",
             "frame_count": len(unique_frames),
+            "min_frame": min_f,
+            "max_frame": max_f,
+            "fps": fps,
+            "duration_sec": dur,
+            "frame_stride": frame_stride,
+            "total_video_frames": total_vid_frames,
             "tracking_rows": len(tracking_df),
             "tracking_file": str(output_csv),
             "possession_share": {"home": home_pct, "away": away_pct},
             "average_tas": avg_tas,
-            "sample_insights": frame_insights[:50],  # first 50 frame insights
+            "sample_insights": frame_insights[:100],
         }

@@ -77,14 +77,31 @@ class VideoGameStateTracker:
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-        # Check if homography is using identity; if so, create empirical homography from preset
+        # Check if homography is using identity; if so, create empirical or auto homography
         if np.allclose(self.homography.matrix, np.eye(3)):
-            self.homography = PitchHomography.from_preset(self.homography_preset, width, height)
+            if self.homography_preset in ("auto", "auto_detect", "auto_broadcast"):
+                # Read first valid frame to automatically estimate pitch boundaries
+                ret_first, first_frame = cap.read()
+                if ret_first and first_frame is not None:
+                    self.homography = PitchHomography.estimate_from_frame(first_frame)
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
+                else:
+                    self.homography = PitchHomography.from_preset("main_broadcast", width, height)
+            else:
+                self.homography = PitchHomography.from_preset(self.homography_preset, width, height)
 
-        if max_frames is not None:
+        if max_frames is not None and max_frames > 0:
             frames_to_process = min(total_frames, max_frames)
         else:
             frames_to_process = total_frames
+
+        self.metadata = {
+            "fps": float(native_fps),
+            "total_frames": int(total_frames),
+            "width": int(width),
+            "height": int(height),
+            "duration_sec": float(round(total_frames / max(native_fps, 1.0), 2)),
+        }
 
         raw_detections: List[Dict[str, Any]] = []
         player_colors: List[tuple[str, np.ndarray]] = []

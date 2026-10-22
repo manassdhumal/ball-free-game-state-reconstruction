@@ -16,7 +16,14 @@ import {
   Sparkles,
   Crosshair,
   RotateCcw,
-  Zap
+  Zap,
+  Clock,
+  Gauge,
+  ChevronLeft,
+  ChevronRight,
+  ChevronsLeft,
+  ChevronsRight,
+  Maximize2
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { Panel, PageHeader } from "@/components/Panel";
@@ -28,7 +35,8 @@ import {
   getVideoStatus, 
   getVideoStreamUrl, 
   runSampleDemo,
-  type VideoProcessResponse 
+  type VideoProcessResponse,
+  type VideoUploadResponse
 } from "@/api/video";
 import { apiFetch } from "@/api/client";
 import type { Player } from "@/lib/data";
@@ -56,9 +64,20 @@ function VideoReconstructionStudio() {
   // Upload & processing state
   const [file, setFile] = useState<File | null>(null);
   const [videoId, setVideoId] = useState<string | null>(null);
-  const [preset, setPreset] = useState("main_broadcast");
-  const [maxFrames, setMaxFrames] = useState(150);
+  const [videoMeta, setVideoMeta] = useState<{
+    total_frames?: number;
+    fps?: number;
+    width?: number;
+    height?: number;
+    duration_sec?: number;
+  } | null>(null);
+
+  // Configuration options
+  const [preset, setPreset] = useState("auto_detect");
+  const [durationPreset, setDurationPreset] = useState<"15s" | "30s" | "1m" | "3m" | "full" | "custom">("1m");
+  const [customMaxFrames, setCustomMaxFrames] = useState<number>(1500);
   const [frameStride, setFrameStride] = useState(1);
+  const [confThreshold, setConfThreshold] = useState(0.18);
   const [applyMitigation, setApplyMitigation] = useState(true);
 
   // 4-Point Interactive Calibration state
@@ -75,9 +94,15 @@ function VideoReconstructionStudio() {
   const [analysisResult, setAnalysisResult] = useState<VideoProcessResponse | null>(null);
   const [currentFrame, setCurrentFrame] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
+  const [playbackSpeed, setPlaybackSpeed] = useState(1.0);
   const [framePlayers, setFramePlayers] = useState<Player[]>([]);
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const videoContainerRef = useRef<HTMLDivElement | null>(null);
+
+  // Effective video parameters
+  const fps = analysisResult?.data.fps || videoMeta?.fps || 25.0;
+  const maxProcessedFrame = analysisResult?.data.max_frame ?? 
+    (analysisResult?.data.frame_count ? analysisResult.data.frame_count - 1 : 0);
 
   // File drop handler
   const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
@@ -85,25 +110,31 @@ function VideoReconstructionStudio() {
     if (e.dataTransfer.files && e.dataTransfer.files.length > 0) {
       setFile(e.dataTransfer.files[0]);
       setErrorMsg(null);
+      setVideoMeta(null);
     }
   };
 
-  // Video container click for 4-point calibration
+  // Video container click for 4-point calibration or play/pause
   const handleVideoClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    if (!isCalibrating || customPoints.length >= 4) return;
-    const rect = videoContainerRef.current?.getBoundingClientRect();
-    if (!rect) return;
+    if (isCalibrating) {
+      if (customPoints.length >= 4) return;
+      const rect = videoContainerRef.current?.getBoundingClientRect();
+      if (!rect) return;
 
-    const clickX = e.clientX - rect.left;
-    const clickY = e.clientY - rect.top;
-    const relX = clickX / rect.width;
-    const relY = clickY / rect.height;
+      const clickX = e.clientX - rect.left;
+      const clickY = e.clientY - rect.top;
+      const relX = clickX / rect.width;
+      const relY = clickY / rect.height;
 
-    // Map relative fraction to video dimensions (default 1280x720)
-    const px = Math.round(relX * 1280);
-    const py = Math.round(relY * 720);
+      const vw = videoMeta?.width || 1280;
+      const vh = videoMeta?.height || 720;
+      const px = Math.round(relX * vw);
+      const py = Math.round(relY * vh);
 
-    setCustomPoints((prev) => [...prev, [px, py]]);
+      setCustomPoints((prev) => [...prev, [px, py]]);
+    } else if (analysisResult && videoRef.current) {
+      togglePlay();
+    }
   };
 
   // Run Sample Demo
@@ -111,19 +142,58 @@ function VideoReconstructionStudio() {
     try {
       setErrorMsg(null);
       setIsProcessing(true);
-      setStatusMsg("Running AI perception on bundled match demo...");
-      setProgress(0.2);
+      setStatusMsg("Starting bundled match demo perception...");
+      setProgress(0.05);
 
-      const demoRes = await runSampleDemo();
+      await runSampleDemo();
       setVideoId("sample_demo_clip");
+
+      const demoResult = await new Promise<VideoProcessResponse>((resolve, reject) => {
+        let attempts = 0;
+        const interval = setInterval(async () => {
+          attempts += 1;
+          if (attempts > 300) {
+            clearInterval(interval);
+            reject(new Error("Demo analysis timed out."));
+            return;
+          }
+
+          try {
+            const st = await getVideoStatus("sample_demo_clip");
+            if (st.progress > 0) {
+              setProgress(st.progress);
+            }
+            if (st.status) {
+              setStatusMsg(st.status);
+            }
+
+            if (st.completed) {
+              clearInterval(interval);
+              if (st.error) {
+                reject(new Error(st.error));
+              } else if (st.data) {
+                resolve(st.data);
+              } else {
+                reject(new Error("Demo completed with no data."));
+              }
+            }
+          } catch {
+            // Transient network error ignored
+          }
+        }, 800);
+      });
+
       setProgress(1.0);
       setStatusMsg("Demo game state reconstructed!");
       setIsProcessing(false);
-      setAnalysisResult(demoRes);
+      setAnalysisResult(demoResult);
       setCurrentFrame(0);
-      setMatchId(demoRes.match_id);
-      setDataset(`Sample Match Clip (${demoRes.match_id})`);
+      setMatchId(demoResult.match_id);
+      setDataset(`Sample Match Clip (${demoResult.match_id})`);
       setFrame(0);
+      if (videoRef.current) {
+        videoRef.current.currentTime = 0;
+      }
     } catch (err: any) {
       setIsProcessing(false);
       setErrorMsg(err.message || "Failed to run sample demo.");
@@ -141,46 +211,91 @@ function VideoReconstructionStudio() {
       setErrorMsg(null);
       setIsUploading(true);
       setStatusMsg("Uploading video to server...");
-      setProgress(0.1);
+      setProgress(0.05);
 
-      const uploadRes = await uploadVideoFile(file);
+      const uploadRes: VideoUploadResponse = await uploadVideoFile(file);
       setVideoId(uploadRes.video_id);
+      setVideoMeta({
+        total_frames: uploadRes.total_frames,
+        fps: uploadRes.fps,
+        width: uploadRes.width,
+        height: uploadRes.height,
+        duration_sec: uploadRes.duration_sec,
+      });
       setIsUploading(false);
 
       setIsProcessing(true);
-      setStatusMsg("Tracking players and running homography calibration...");
+      setStatusMsg("Initializing tracking and pitch homography engine...");
+      setProgress(0.1);
 
-      // Start polling status
-      const pollInterval = setInterval(async () => {
-        try {
-          const st = await getVideoStatus(uploadRes.video_id);
-          if (st.progress > 0) {
-            setProgress(st.progress);
-            setStatusMsg(st.status);
-          }
-        } catch {
-          // Ignore transient errors
-        }
-      }, 800);
+      // Determine frames to process
+      let framesToRun: number | undefined = 1500;
+      if (durationPreset === "15s") framesToRun = 375;
+      else if (durationPreset === "30s") framesToRun = 750;
+      else if (durationPreset === "1m") framesToRun = 1500;
+      else if (durationPreset === "3m") framesToRun = 4500;
+      else if (durationPreset === "full") framesToRun = 0; // 0 signals full video
+      else if (durationPreset === "custom") framesToRun = customMaxFrames;
 
-      const processRes = await processVideo({
+      // Trigger background processing
+      await processVideo({
         video_id: uploadRes.video_id,
-        preset: preset === "custom_4point" ? "main_broadcast" : preset,
-        max_frames: maxFrames,
+        preset: preset === "custom_4point" ? "auto_detect" : preset,
+        max_frames: framesToRun,
         frame_stride: frameStride,
+        conf_threshold: confThreshold,
         apply_mitigation: applyMitigation,
         custom_corners: customPoints.length === 4 ? customPoints : undefined,
       });
 
-      clearInterval(pollInterval);
+      // Poll until background processing completes
+      const resultData = await new Promise<VideoProcessResponse>((resolve, reject) => {
+        let attempts = 0;
+        const maxAttempts = 900; // 12 minutes max polling
+        const interval = setInterval(async () => {
+          attempts += 1;
+          if (attempts > maxAttempts) {
+            clearInterval(interval);
+            reject(new Error("Video analysis timed out after 12 minutes."));
+            return;
+          }
+
+          try {
+            const st = await getVideoStatus(uploadRes.video_id);
+            if (st.progress > 0) {
+              setProgress(st.progress);
+            }
+            if (st.status) {
+              setStatusMsg(st.status);
+            }
+
+            if (st.completed) {
+              clearInterval(interval);
+              if (st.error) {
+                reject(new Error(st.error));
+              } else if (st.data) {
+                resolve(st.data);
+              } else {
+                reject(new Error("Processing completed with no data."));
+              }
+            }
+          } catch {
+            // Ignore transient network hiccups during status polling
+          }
+        }, 800);
+      });
+
       setProgress(1.0);
       setStatusMsg("Game state reconstruction complete!");
       setIsProcessing(false);
-      setAnalysisResult(processRes);
+      setAnalysisResult(resultData);
       setCurrentFrame(0);
-      setMatchId(processRes.match_id);
+      setMatchId(resultData.match_id);
       setDataset(`Video: ${file.name.replace(/\.[^/.]+$/, "")}`);
       setFrame(0);
+      if (videoRef.current) {
+        videoRef.current.currentTime = 0;
+      }
     } catch (err: any) {
       setIsUploading(false);
       setIsProcessing(false);
@@ -215,27 +330,49 @@ function VideoReconstructionStudio() {
         setFramePlayers(mapped);
       })
       .catch(() => {
-        // Handle missing frame quietly
+        // Fallback or missing frame handled gracefully
       });
   }, [analysisResult, currentFrame]);
 
-  // Synchronized playback timer
-  useEffect(() => {
-    let timer: any = null;
-    if (isPlaying && analysisResult) {
-      timer = setInterval(() => {
-        setCurrentFrame((prev) => {
-          const next = prev + 1;
-          if (next >= (analysisResult.data.frame_count || 1)) {
-            setIsPlaying(false);
-            return 0;
-          }
-          return next;
-        });
-      }, 100);
+  // Synchronized playback controls
+  const togglePlay = () => {
+    if (!videoRef.current) return;
+    if (videoRef.current.paused) {
+      videoRef.current.play().then(() => setIsPlaying(true)).catch(console.error);
+    } else {
+      videoRef.current.pause();
+      setIsPlaying(false);
     }
-    return () => clearInterval(timer);
-  }, [isPlaying, analysisResult]);
+  };
+
+  const handleSeekFrame = (targetFrame: number) => {
+    const clamped = Math.max(0, Math.min(maxProcessedFrame, targetFrame));
+    setCurrentFrame(clamped);
+    if (videoRef.current) {
+      videoRef.current.currentTime = clamped / fps;
+    }
+  };
+
+  const handleVideoTimeUpdate = () => {
+    if (!videoRef.current || !analysisResult) return;
+    const curTime = videoRef.current.currentTime;
+    const computedFrame = Math.min(maxProcessedFrame, Math.round(curTime * fps));
+    setCurrentFrame(computedFrame);
+  };
+
+  const handleSpeedChange = (speed: number) => {
+    setPlaybackSpeed(speed);
+    if (videoRef.current) {
+      videoRef.current.playbackRate = speed;
+    }
+  };
+
+  const formatTime = (seconds: number) => {
+    const m = Math.floor(seconds / 60);
+    const s = Math.floor(seconds % 60);
+    const ms = Math.floor((seconds % 1) * 100);
+    return `${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}.${ms.toString().padStart(2, "0")}`;
+  };
 
   const currentInsight = analysisResult?.data.sample_insights.find((s) => s.frame === currentFrame);
 
@@ -276,7 +413,7 @@ function VideoReconstructionStudio() {
 
       <PageHeader
         title="Video Game State Reconstruction Studio"
-        description="Upload a gameplay video clip to detect players, reconstruct pitch coordinates, and compute ball-free possession and Tactical Advantage Scores in real time."
+        description="Upload a match gameplay video to detect players, reconstruct canonical pitch coordinates with adaptive homography, and compute ball-free possession and Tactical Advantage Scores in real time."
       />
 
       {/* Perception Engine Banner & One-Click Demo Action */}
@@ -284,7 +421,7 @@ function VideoReconstructionStudio() {
         <div className="flex items-center gap-2">
           <ShieldCheck className="h-4 w-4 text-emerald-400 shrink-0" />
           <span>
-            <strong className="uppercase tracking-wider">Perception Engine Active:</strong> YOLOv8 + ByteTrack + 2D Homography is operational.
+            <strong className="uppercase tracking-wider">Perception Engine Active:</strong> YOLOv8 + ByteTrack + Adaptive Pitch Homography is operational.
           </span>
         </div>
         <button
@@ -301,7 +438,7 @@ function VideoReconstructionStudio() {
       <div className="grid gap-4 lg:grid-cols-12">
         {/* Left Column: Upload & Configuration Controls */}
         <div className="lg:col-span-5 space-y-4">
-          <Panel title="Video Ingestion" subtitle="Upload gameplay (.mp4, .mov, .avi)">
+          <Panel title="Video Ingestion" subtitle="Upload gameplay (.mp4, .mov, .avi, .webm)">
             {/* Drag & Drop Zone */}
             <div
               onDragOver={(e) => e.preventDefault()}
@@ -320,6 +457,7 @@ function VideoReconstructionStudio() {
                   if (e.target.files && e.target.files.length > 0) {
                     setFile(e.target.files[0]);
                     setErrorMsg(null);
+                    setVideoMeta(null);
                   }
                 }}
               />
@@ -328,22 +466,28 @@ function VideoReconstructionStudio() {
                 <div>
                   <div className="text-sm font-semibold text-emerald-400">{file.name}</div>
                   <div className="text-xs text-muted-foreground mt-0.5">
-                    {(file.size / (1024 * 1024)).toFixed(2)} MB • Ready to process
+                    {(file.size / (1024 * 1024)).toFixed(2)} MB • Ready to analyze
                   </div>
+                  {videoMeta && (
+                    <div className="mt-2 text-[11px] font-mono text-emerald-300 border border-emerald-500/30 bg-emerald-500/10 p-1.5 rounded inline-block">
+                      Duration: {formatTime(videoMeta.duration_sec || 0)} • {videoMeta.total_frames} frames @ {videoMeta.fps} FPS ({videoMeta.width}x{videoMeta.height})
+                    </div>
+                  )}
                 </div>
               ) : (
                 <div>
                   <div className="text-sm font-medium">Click to upload or drag & drop video</div>
-                  <div className="text-xs text-muted-foreground mt-1">Recommended: 10–30s match clips at 25 FPS</div>
+                  <div className="text-xs text-muted-foreground mt-1">Upload any match clip (10 seconds to several minutes)</div>
                 </div>
               )}
             </div>
 
             {/* Pipeline Configuration Parameters */}
-            <div className="mt-4 space-y-3 border-t border-border pt-3 text-xs">
+            <div className="mt-4 space-y-3.5 border-t border-border pt-3 text-xs">
+              {/* Pitch Homography Preset */}
               <div className="flex items-center justify-between">
                 <span className="text-muted-foreground flex items-center gap-1.5 font-medium">
-                  <Sliders className="h-3.5 w-3.5" /> Camera Preset
+                  <Sliders className="h-3.5 w-3.5" /> Pitch Projection Mode
                 </span>
                 <select
                   value={preset}
@@ -355,12 +499,13 @@ function VideoReconstructionStudio() {
                       setIsCalibrating(false);
                     }
                   }}
-                  className="bg-panel border border-border px-2 py-1 text-xs rounded"
+                  className="bg-panel border border-border px-2 py-1 text-xs rounded font-medium text-foreground"
                 >
+                  <option value="auto_detect">✨ Auto-Detect Pitch (AI Field Grass Segmentation)</option>
                   <option value="main_broadcast">Main Broadcast (Elevated Sideline)</option>
-                  <option value="tactical_wide">Tactical Wide (High Endline)</option>
-                  <option value="normalized">Normalized 2D Radar View</option>
-                  <option value="custom_4point">Custom 4-Point Calibration</option>
+                  <option value="tactical_wide">Tactical Wide (High Endline / All-22)</option>
+                  <option value="normalized">Direct Bird&apos;s Eye / Top-Down</option>
+                  <option value="custom_4point">Custom 4-Point Interactive Calibration</option>
                 </select>
               </div>
 
@@ -375,36 +520,111 @@ function VideoReconstructionStudio() {
                       onClick={() => setCustomPoints([])}
                       className="text-[10px] text-muted-foreground hover:text-white flex items-center gap-0.5"
                     >
-                      <RotateCcw className="h-3 w-3" /> Reset
+                      <RotateCcw className="h-3 w-3" /> Reset Points
                     </button>
                   </div>
                   <div className="text-[11px] text-muted-foreground">
-                    Click 4 pitch points on the video: Top-Left, Top-Right, Bottom-Right, Bottom-Left.
+                    Click 4 pitch corners on the video player: Top-Left, Top-Right, Bottom-Right, Bottom-Left.
                   </div>
                   <div className="font-mono text-[10px] text-blue-300">
-                    Points placed: {customPoints.length} / 4
+                    Corners placed: {customPoints.length} / 4
                   </div>
                 </div>
               )}
 
+              {/* Duration to Process Selection */}
+              <div>
+                <div className="flex items-center justify-between mb-1.5">
+                  <span className="text-muted-foreground flex items-center gap-1.5 font-medium">
+                    <Clock className="h-3.5 w-3.5" /> Segment Duration to Process
+                  </span>
+                  <span className="font-mono text-[11px] text-emerald-400">
+                    {durationPreset === "15s" && "15 sec (~375 frames)"}
+                    {durationPreset === "30s" && "30 sec (~750 frames)"}
+                    {durationPreset === "1m" && "1 min (~1,500 frames)"}
+                    {durationPreset === "3m" && "3 min (~4,500 frames)"}
+                    {durationPreset === "full" && "Full Video (All Frames)"}
+                    {durationPreset === "custom" && `${customMaxFrames} frames`}
+                  </span>
+                </div>
+                <div className="grid grid-cols-6 gap-1">
+                  {(["15s", "30s", "1m", "3m", "full", "custom"] as const).map((mode) => (
+                    <button
+                      key={mode}
+                      type="button"
+                      onClick={() => setDurationPreset(mode)}
+                      className={`py-1 text-[11px] font-medium rounded transition-all ${
+                        durationPreset === mode
+                          ? "bg-emerald-600 text-white font-semibold shadow-sm"
+                          : "bg-panel-alt border border-border text-muted-foreground hover:text-foreground"
+                      }`}
+                    >
+                      {mode.toUpperCase()}
+                    </button>
+                  ))}
+                </div>
+
+                {durationPreset === "custom" && (
+                  <div className="mt-2 flex items-center gap-2">
+                    <input
+                      type="range"
+                      min={50}
+                      max={10000}
+                      step={50}
+                      value={customMaxFrames}
+                      onChange={(e) => setCustomMaxFrames(Number(e.target.value))}
+                      className="w-full accent-emerald-500"
+                    />
+                    <span className="w-16 text-right font-mono text-[11px]">{customMaxFrames}f</span>
+                  </div>
+                )}
+              </div>
+
+              {/* Frame Sampling Stride */}
               <div className="flex items-center justify-between">
-                <span className="text-muted-foreground font-medium">Max Frames to Process</span>
-                <div className="flex items-center gap-2">
+                <div>
+                  <span className="text-muted-foreground flex items-center gap-1.5 font-medium">
+                    <Gauge className="h-3.5 w-3.5" /> Frame Sampling Stride
+                  </span>
+                  <div className="text-[10px] text-muted-foreground">Speed up processing for multi-minute videos</div>
+                </div>
+                <select
+                  value={frameStride}
+                  onChange={(e) => setFrameStride(Number(e.target.value))}
+                  className="bg-panel border border-border px-2 py-1 text-xs rounded font-mono"
+                >
+                  <option value={1}>Stride 1 (All frames — 100% fidelity)</option>
+                  <option value={2}>Stride 2 (Every 2nd frame — 2x faster)</option>
+                  <option value={3}>Stride 3 (Every 3rd frame — 3x faster)</option>
+                  <option value={5}>Stride 5 (Every 5th frame — 5x ultra fast)</option>
+                </select>
+              </div>
+
+              {/* Detection Sensitivity */}
+              <div className="flex items-center justify-between">
+                <div>
+                  <span className="text-muted-foreground flex items-center gap-1.5 font-medium">
+                    Player Detection Sensitivity
+                  </span>
+                  <div className="text-[10px] text-muted-foreground">Lower confidence detects distant/small players</div>
+                </div>
+                <div className="flex items-center gap-1.5">
                   <input
                     type="range"
-                    min={30}
-                    max={300}
-                    step={10}
-                    value={maxFrames}
-                    onChange={(e) => setMaxFrames(Number(e.target.value))}
-                    className="w-24 accent-emerald-500"
+                    min={0.10}
+                    max={0.40}
+                    step={0.02}
+                    value={confThreshold}
+                    onChange={(e) => setConfThreshold(Number(e.target.value))}
+                    className="w-20 accent-emerald-500"
                   />
-                  <span className="w-8 text-right font-mono text-[11px]">{maxFrames}</span>
+                  <span className="font-mono text-[11px] w-8 text-right">{confThreshold.toFixed(2)}</span>
                 </div>
               </div>
 
+              {/* Trajectory Mitigation */}
               <div className="flex items-center justify-between">
-                <span className="text-muted-foreground font-medium">Trajectory Cleaning</span>
+                <span className="text-muted-foreground font-medium">Trajectory Smoothing</span>
                 <label className="flex items-center gap-1.5 cursor-pointer">
                   <input
                     type="checkbox"
@@ -429,8 +649,8 @@ function VideoReconstructionStudio() {
             {(isUploading || isProcessing) && (
               <div className="mt-4 space-y-1.5">
                 <div className="flex justify-between text-xs text-muted-foreground">
-                  <span>{statusMsg}</span>
-                  <span>{Math.round(progress * 100)}%</span>
+                  <span className="font-medium text-foreground">{statusMsg}</span>
+                  <span className="font-mono">{Math.round(progress * 100)}%</span>
                 </div>
                 <div className="h-1.5 w-full bg-panel-alt overflow-hidden rounded">
                   <div
@@ -445,11 +665,11 @@ function VideoReconstructionStudio() {
             <button
               onClick={handleStartAnalysis}
               disabled={!file || isUploading || isProcessing}
-              className="mt-4 w-full flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-xs font-semibold py-2 px-4 rounded transition-colors"
+              className="mt-4 w-full flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-500 disabled:opacity-50 text-white text-xs font-semibold py-2.5 px-4 rounded transition-colors shadow-sm"
             >
               {isUploading || isProcessing ? (
                 <>
-                  <RefreshCw className="h-3.5 w-3.5 animate-spin" /> Processing Video...
+                  <RefreshCw className="h-3.5 w-3.5 animate-spin" /> Processing Video Pipeline...
                 </>
               ) : (
                 <>
@@ -465,7 +685,9 @@ function VideoReconstructionStudio() {
               <div className="grid grid-cols-2 gap-2 text-xs">
                 <div className="border border-border bg-panel-alt p-2 rounded">
                   <div className="text-muted-foreground text-[11px]">Frames Reconstructed</div>
-                  <div className="text-base font-bold font-mono">{analysisResult.data.frame_count}</div>
+                  <div className="text-base font-bold font-mono">
+                    {analysisResult.data.frame_count} frames ({analysisResult.data.duration_sec || (analysisResult.data.max_frame ? (analysisResult.data.max_frame / fps).toFixed(1) : 0)}s)
+                  </div>
                 </div>
                 <div className="border border-border bg-panel-alt p-2 rounded">
                   <div className="text-muted-foreground text-[11px]">Player Observations</div>
@@ -509,7 +731,11 @@ function VideoReconstructionStudio() {
         <div className="lg:col-span-7 space-y-4">
           <Panel 
             title="Synchronized Game State Radar" 
-            subtitle={analysisResult ? `Frame ${currentFrame} / ${analysisResult.data.frame_count}` : "Waiting for video upload"}
+            subtitle={
+              analysisResult 
+                ? `Frame ${currentFrame} / ${maxProcessedFrame} (${formatTime(currentFrame / fps)} / ${formatTime(maxProcessedFrame / fps)})`
+                : "Waiting for video upload"
+            }
           >
             {/* Split Screen Container */}
             <div className="grid md:grid-cols-2 gap-3 items-center">
@@ -517,7 +743,7 @@ function VideoReconstructionStudio() {
               <div 
                 ref={videoContainerRef}
                 onClick={handleVideoClick}
-                className={`relative aspect-video bg-black border border-border flex items-center justify-center overflow-hidden rounded ${
+                className={`relative aspect-video bg-black border border-border flex items-center justify-center overflow-hidden rounded group cursor-pointer ${
                   isCalibrating ? "cursor-crosshair ring-2 ring-blue-500" : ""
                 }`}
               >
@@ -525,30 +751,47 @@ function VideoReconstructionStudio() {
                   <video
                     ref={videoRef}
                     src={getVideoStreamUrl(videoId)}
-                    className="w-full h-full object-contain pointer-events-none"
-                    controls={false}
+                    className="w-full h-full object-contain"
+                    playsInline
+                    onTimeUpdate={handleVideoTimeUpdate}
+                    onPlay={() => setIsPlaying(true)}
+                    onPause={() => setIsPlaying(false)}
+                    onEnded={() => setIsPlaying(false)}
                   />
                 ) : (
-                  <div className="text-center p-4 text-muted-foreground">
+                  <div className="text-center p-4 text-muted-foreground pointer-events-none">
                     <Video className="mx-auto h-8 w-8 mb-2 opacity-40" />
                     <span className="text-xs">Uploaded video will play here</span>
                   </div>
                 )}
+
+                {/* Center Play Overlay when Paused */}
+                {videoId && !isPlaying && !isCalibrating && (
+                  <div className="absolute inset-0 flex items-center justify-center bg-black/30 pointer-events-none transition-opacity">
+                    <div className="h-12 w-12 rounded-full bg-emerald-600/90 flex items-center justify-center text-white shadow-xl">
+                      <Play className="h-6 w-6 ml-0.5" />
+                    </div>
+                  </div>
+                )}
                 
                 {/* 4-Point Calibration Markers */}
-                {isCalibrating && customPoints.map((pt, i) => (
-                  <div
-                    key={i}
-                    className="absolute w-5 h-5 -ml-2.5 -mt-2.5 rounded-full bg-blue-500 text-white font-bold text-[10px] flex items-center justify-center shadow-lg border border-white"
-                    style={{ left: `${(pt[0] / 1280) * 100}%`, top: `${(pt[1] / 720) * 100}%` }}
-                  >
-                    {i + 1}
-                  </div>
-                ))}
+                {isCalibrating && customPoints.map((pt, i) => {
+                  const vw = videoMeta?.width || 1280;
+                  const vh = videoMeta?.height || 720;
+                  return (
+                    <div
+                      key={i}
+                      className="absolute w-5 h-5 -ml-2.5 -mt-2.5 rounded-full bg-blue-500 text-white font-bold text-[10px] flex items-center justify-center shadow-lg border border-white"
+                      style={{ left: `${(pt[0] / vw) * 100}%`, top: `${(pt[1] / vh) * 100}%` }}
+                    >
+                      {i + 1}
+                    </div>
+                  );
+                })}
 
                 {videoId && (
-                  <div className="absolute top-2 left-2 bg-black/70 px-1.5 py-0.5 text-[10px] font-mono text-white rounded">
-                    Frame {currentFrame}
+                  <div className="absolute top-2 left-2 bg-black/80 px-2 py-0.5 text-[10px] font-mono text-white rounded pointer-events-none border border-white/20">
+                    Frame {currentFrame} • {formatTime(currentFrame / fps)}
                   </div>
                 )}
               </div>
@@ -566,27 +809,86 @@ function VideoReconstructionStudio() {
 
             {/* Playback Controls & Frame Scrubber */}
             {analysisResult && (
-              <div className="mt-3 flex items-center gap-3 border-t border-border pt-3">
-                <button
-                  onClick={() => setIsPlaying(!isPlaying)}
-                  className="bg-emerald-600 hover:bg-emerald-500 text-white p-1.5 rounded transition-colors"
-                >
-                  {isPlaying ? <Pause className="h-4 w-4" /> : <Play className="h-4 w-4" />}
-                </button>
-                <input
-                  type="range"
-                  min={0}
-                  max={(analysisResult.data.frame_count || 1) - 1}
-                  value={currentFrame}
-                  onChange={(e) => {
-                    setIsPlaying(false);
-                    setCurrentFrame(Number(e.target.value));
-                  }}
-                  className="w-full accent-emerald-500"
-                />
-                <span className="font-mono text-xs w-16 text-right">
-                  {currentFrame} / {analysisResult.data.frame_count - 1}
-                </span>
+              <div className="mt-3 border-t border-border pt-3 space-y-2">
+                <div className="flex items-center gap-2">
+                  <input
+                    type="range"
+                    min={0}
+                    max={maxProcessedFrame}
+                    value={currentFrame}
+                    onChange={(e) => handleSeekFrame(Number(e.target.value))}
+                    className="w-full accent-emerald-500 h-1.5 bg-panel-alt rounded cursor-pointer"
+                  />
+                </div>
+
+                <div className="flex items-center justify-between text-xs">
+                  {/* Playback Buttons */}
+                  <div className="flex items-center gap-1.5">
+                    <button
+                      onClick={() => handleSeekFrame(Math.max(0, currentFrame - 5))}
+                      title="Step -5 Frames"
+                      className="p-1 rounded bg-panel-alt hover:bg-muted text-foreground transition-colors border border-border"
+                    >
+                      <ChevronsLeft className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      onClick={() => handleSeekFrame(Math.max(0, currentFrame - 1))}
+                      title="Step -1 Frame"
+                      className="p-1 rounded bg-panel-alt hover:bg-muted text-foreground transition-colors border border-border"
+                    >
+                      <ChevronLeft className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      onClick={togglePlay}
+                      title={isPlaying ? "Pause" : "Play"}
+                      className="bg-emerald-600 hover:bg-emerald-500 text-white p-1.5 rounded transition-colors px-2.5 flex items-center gap-1"
+                    >
+                      {isPlaying ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
+                      <span className="text-[11px] font-semibold">{isPlaying ? "Pause" : "Play"}</span>
+                    </button>
+                    <button
+                      onClick={() => handleSeekFrame(Math.min(maxProcessedFrame, currentFrame + 1))}
+                      title="Step +1 Frame"
+                      className="p-1 rounded bg-panel-alt hover:bg-muted text-foreground transition-colors border border-border"
+                    >
+                      <ChevronRight className="h-3.5 w-3.5" />
+                    </button>
+                    <button
+                      onClick={() => handleSeekFrame(Math.min(maxProcessedFrame, currentFrame + 5))}
+                      title="Step +5 Frames"
+                      className="p-1 rounded bg-panel-alt hover:bg-muted text-foreground transition-colors border border-border"
+                    >
+                      <ChevronsRight className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+
+                  {/* Frame & Time Counter */}
+                  <div className="font-mono text-xs text-muted-foreground flex items-center gap-2">
+                    <span className="text-emerald-400 font-semibold">{formatTime(currentFrame / fps)}</span>
+                    <span>/</span>
+                    <span>{formatTime(maxProcessedFrame / fps)}</span>
+                    <span className="text-[10px] text-muted-foreground bg-panel-alt px-1.5 py-0.5 rounded border border-border">
+                      Frame {currentFrame} / {maxProcessedFrame}
+                    </span>
+                  </div>
+
+                  {/* Playback Speed Selector */}
+                  <div className="flex items-center gap-1">
+                    {[0.5, 1.0, 1.5, 2.0].map((spd) => (
+                      <button
+                        key={spd}
+                        onClick={() => handleSpeedChange(spd)}
+                        className={`text-[10px] font-mono px-1.5 py-0.5 rounded transition-colors ${
+                          playbackSpeed === spd
+                            ? "bg-emerald-600 text-white font-bold"
+                            : "bg-panel-alt hover:bg-muted text-muted-foreground"
+                        }`}
+                      >
+                        {spd}x
+                      </button>
+                    ))}
+                  </div>
+                </div>
               </div>
             )}
 

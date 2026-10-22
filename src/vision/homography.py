@@ -70,7 +70,11 @@ class PitchHomography:
         """Construct an empirical homography matrix based on common broadcast camera presets."""
         w, h = float(frame_width), float(frame_height)
 
-        if preset_name == "main_broadcast":
+        if preset_name in ("auto", "auto_detect", "auto_broadcast"):
+            # Attempt empirical detection or fallback to main_broadcast
+            return cls.from_preset("main_broadcast", frame_width, frame_height)
+
+        elif preset_name == "main_broadcast":
             # Typical elevated midfield broadcast camera covering attacking/defending thirds
             src = [
                 (0.18 * w, 0.22 * h),  # Top-left pitch boundary
@@ -110,8 +114,35 @@ class PitchHomography:
 
         else:
             raise ValueError(
-                f"Unknown preset: '{preset_name}'. Available: 'main_broadcast', 'tactical_wide', 'normalized'."
+                f"Unknown preset: '{preset_name}'. Available: 'auto_detect', 'main_broadcast', 'tactical_wide', 'normalized'."
             )
+
+    @classmethod
+    def estimate_from_frame(cls, frame: np.ndarray) -> PitchHomography:
+        """Automatically detect the green pitch polygon and compute homography."""
+        h, w = frame.shape[:2]
+        hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+        grass = (hsv[:, :, 0] >= 30) & (hsv[:, :, 0] <= 85) & (hsv[:, :, 1] >= 28) & (hsv[:, :, 2] >= 28)
+        grass_mask = grass.astype(np.uint8) * 255
+        kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (15, 15))
+        cleaned = cv2.morphologyEx(grass_mask, cv2.MORPH_CLOSE, kernel)
+        cleaned = cv2.morphologyEx(cleaned, cv2.MORPH_OPEN, kernel)
+        contours, _ = cv2.findContours(cleaned, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+        if not contours:
+            return cls.from_preset("main_broadcast", w, h)
+        c = max(contours, key=cv2.contourArea)
+        area = cv2.contourArea(c)
+        if area < 0.10 * w * h:
+            # Grass region is too small, fallback to empirical broadcast preset
+            return cls.from_preset("main_broadcast", w, h)
+        rect = cv2.minAreaRect(c)
+        box = cv2.boxPoints(rect)
+        box = sorted(box, key=lambda p: p[1])
+        top_two = sorted(box[:2], key=lambda p: p[0])
+        bot_two = sorted(box[2:], key=lambda p: p[0], reverse=True)
+        ordered = [top_two[0], top_two[1], bot_two[0], bot_two[1]]
+        dst = [(0.05, 0.05), (0.95, 0.05), (0.95, 0.95), (0.05, 0.95)]
+        return cls.from_four_points(ordered, dst)
 
     def project_point(self, u: float, v: float) -> Tuple[float, float]:
         """Project a single pixel coordinate (u, v) into normalized pitch space (x, y)."""
