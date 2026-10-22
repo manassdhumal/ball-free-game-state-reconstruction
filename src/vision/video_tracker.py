@@ -491,6 +491,18 @@ class VideoGameStateTracker:
             return df
 
         dense_df = pd.concat(records, ignore_index=True)
+
+        # Step 4: Canonicalize player numbers per team (Home 1..N, Away 1..N sorted by pitch depth X)
+        # Gives permanent, standard football jersey numbers (e.g. GK=1, Defenders=2..5, Midfielders=6..8, Forwards=9..11)
+        id_map = {}
+        for team, group in dense_df.groupby("team"):
+            medians = group.groupby("player_id")["x"].median()
+            ascending = (team == "home")
+            sorted_pids = medians.sort_values(ascending=ascending).index.tolist()
+            for num, pid in enumerate(sorted_pids, start=1):
+                id_map[pid] = f"{team.upper()}_{num}"
+
+        dense_df["player_id"] = dense_df["player_id"].map(id_map)
         dense_df = dense_df.sort_values(by=["frame", "player_id"]).reset_index(drop=True)
         return dense_df
 

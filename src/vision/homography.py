@@ -261,30 +261,33 @@ class PitchMarkingDetector:
 
         u_center = w / 2.0
         # Broadcast cameras view pitch with trapezoidal perspective foreshortening
-        top_left_u = max(0.02 * w, u_center - (u_center - 0.05 * w) * 0.85)
-        top_right_u = min(0.98 * w, u_center + (0.95 * w - u_center) * 0.85)
+        top_left_u = max(0.04 * w, u_center - (u_center - 0.04 * w) * 0.88)
+        top_right_u = min(0.96 * w, u_center + (0.96 * w - u_center) * 0.88)
+        bot_left_u = 0.02 * w
+        bot_right_u = 0.98 * w
 
         # Case A: Halfway line is visible -> Anchor canonical X = 0.50
         if half_line is not None and half_conf >= 0.35:
             (u_top, _), (u_bot, _) = half_line
-            est_window = 0.48
-            x_top_left = max(0.01, 0.50 - (u_top / w) * est_window)
-            x_top_right = min(0.99, x_top_left + est_window)
+            # Broadcast match footage typically spans 85-90% of pitch length
+            est_window = 0.88
+            x_top_left = max(0.02, 0.50 - (u_top / w) * est_window)
+            x_top_right = min(0.98, x_top_left + est_window)
 
-            x_bot_left = max(0.01, 0.50 - (u_bot / w) * est_window)
-            x_bot_right = min(0.99, x_bot_left + est_window)
+            x_bot_left = max(0.02, 0.50 - (u_bot / w) * est_window)
+            x_bot_right = min(0.98, x_bot_left + est_window)
 
             src_quad = [
-                (0.04 * w, v_top),
-                (0.96 * w, v_top),
-                (0.96 * w, v_bot),
-                (0.04 * w, v_bot),
+                (top_left_u, v_top),
+                (top_right_u, v_top),
+                (bot_right_u, v_bot),
+                (bot_left_u, v_bot),
             ]
             dst_quad = [
-                (x_top_left, 0.00),
-                (x_top_right, 0.00),
-                (x_bot_right, 1.00),
-                (x_bot_left, 1.00),
+                (x_top_left, 0.02),
+                (x_top_right, 0.02),
+                (x_bot_right, 0.98),
+                (x_bot_left, 0.98),
             ]
             return src_quad, dst_quad
 
@@ -505,16 +508,16 @@ class PitchHomography:
 
         elif preset_name == "main_broadcast":
             src = [
-                (0.12 * w, 0.16 * h),
-                (0.88 * w, 0.16 * h),
-                (0.96 * w, 0.90 * h),
-                (0.04 * w, 0.90 * h),
+                (0.08 * w, 0.20 * h),
+                (0.92 * w, 0.20 * h),
+                (0.98 * w, 0.96 * h),
+                (0.02 * w, 0.96 * h),
             ]
             dst = [
-                (0.10, 0.08),
-                (0.90, 0.08),
-                (0.92, 0.92),
-                (0.08, 0.92),
+                (0.06, 0.02),
+                (0.94, 0.02),
+                (0.94, 0.98),
+                (0.06, 0.98),
             ]
             return cls.from_four_points(src, dst)
 
