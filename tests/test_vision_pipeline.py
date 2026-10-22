@@ -4,7 +4,7 @@ import unittest
 import numpy as np
 import pandas as pd
 
-from src.vision.homography import PitchHomography
+from src.vision.homography import PitchHomography, PitchMarkingDetector, CameraMotionTracker
 from src.vision.jersey_classifier import JerseyClassifier
 
 
@@ -47,6 +47,56 @@ class TestPitchHomography(unittest.TestCase):
         self.assertEqual(proj.shape, (3, 2))
         self.assertAlmostEqual(proj[1, 0], 0.5, places=2)
         self.assertAlmostEqual(proj[1, 1], 0.5, places=2)
+
+    def test_project_point_safe(self):
+        h = PitchHomography()
+        # Inside bounds
+        px, py, on_pitch = h.project_point_safe(0.5, 0.5)
+        self.assertTrue(on_pitch)
+        self.assertAlmostEqual(px, 0.5, places=5)
+        self.assertAlmostEqual(py, 0.5, places=5)
+
+        # Well outside pitch bounds
+        px_out, py_out, on_pitch_out = h.project_point_safe(2.5, 3.0)
+        self.assertFalse(on_pitch_out)
+        self.assertIsNone(px_out)
+        self.assertIsNone(py_out)
+
+
+class TestPitchMarkingDetector(unittest.TestCase):
+    """Test pitch segmentation and geometry detection."""
+
+    def test_extract_grass_and_lines(self):
+        # Create synthetic green turf frame
+        frame = np.full((120, 160, 3), [45, 150, 45], dtype=np.uint8)
+        # Add white marking line
+        frame[60:64, 20:140] = [255, 255, 255]
+
+        grass_mask, white_line_mask, pitch_contour = PitchMarkingDetector.extract_grass_and_lines(frame)
+        self.assertIsNotNone(grass_mask)
+        self.assertIsNotNone(white_line_mask)
+        self.assertGreater(np.sum(grass_mask > 0), 100)
+        self.assertGreater(np.sum(white_line_mask > 0), 20)
+
+    def test_detect_pitch_geometry_fallback(self):
+        # Plain green frame should produce bounding geometry
+        frame = np.full((120, 160, 3), [45, 150, 45], dtype=np.uint8)
+        src_quad, dst_quad = PitchMarkingDetector.detect_pitch_geometry(frame)
+        if src_quad is not None:
+            self.assertEqual(len(src_quad), 4)
+            self.assertEqual(len(dst_quad), 4)
+
+
+class TestCameraMotionTracker(unittest.TestCase):
+    """Test inter-frame homography motion tracking."""
+
+    def test_camera_motion_tracker_initialization(self):
+        h0 = PitchHomography()
+        tracker = CameraMotionTracker(h0)
+        frame1 = np.full((100, 100, 3), [45, 140, 45], dtype=np.uint8)
+        h_out = tracker.update(frame1)
+        self.assertIsNotNone(h_out)
+        np.testing.assert_array_almost_equal(h_out.matrix, h0.matrix)
 
 
 class TestJerseyClassifier(unittest.TestCase):

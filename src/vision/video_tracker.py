@@ -10,7 +10,7 @@ from ultralytics import YOLO
 
 from pathlib import Path
 
-from .homography import PitchHomography
+from .homography import PitchHomography, PitchMarkingDetector, CameraMotionTracker
 from .jersey_classifier import JerseyClassifier
 
 
@@ -90,6 +90,8 @@ class VideoGameStateTracker:
             else:
                 self.homography = PitchHomography.from_preset(self.homography_preset, width, height)
 
+        camera_tracker = CameraMotionTracker(self.homography)
+
         if max_frames is not None and max_frames > 0:
             frames_to_process = min(total_frames, max_frames)
         else:
@@ -108,7 +110,7 @@ class VideoGameStateTracker:
         frame_idx = 0
         processed_count = 0
 
-        # Phase 1: Frame-by-frame detection and tracking
+        # Phase 1: Frame-by-frame detection, camera motion tracking, and pitch filtering
         while cap.isOpened() and frame_idx < frames_to_process:
             ret, frame = cap.read()
             if not ret:
@@ -117,6 +119,10 @@ class VideoGameStateTracker:
             if frame_idx % frame_stride != 0:
                 frame_idx += 1
                 continue
+
+            # Extract playable pitch surface and contours
+            grass_mask, _white_lines, pitch_contour = PitchMarkingDetector.extract_grass_and_lines(frame)
+            has_grass = bool(np.mean(grass_mask > 0) > 0.08)
 
             track_kwargs: Dict[str, Any] = {
                 "source": frame,
@@ -137,6 +143,14 @@ class VideoGameStateTracker:
                 fallback_kwargs["conf"] = 0.10
                 results = self.model.track(**fallback_kwargs)
 
+            detected_boxes_xyxy: List[List[float]] = []
+            if results and len(results) > 0 and results[0].boxes is not None:
+                for b in results[0].boxes:
+                    detected_boxes_xyxy.append(b.xyxy[0].cpu().numpy().tolist())
+
+            # Update camera homography dynamically to track camera pan/tilt/zoom across frames
+            self.homography = camera_tracker.update(frame, detected_boxes_xyxy)
+
             if results and len(results) > 0 and results[0].boxes is not None:
                 boxes = results[0].boxes
                 for box_idx, box in enumerate(boxes):
@@ -147,12 +161,32 @@ class VideoGameStateTracker:
                     conf = float(box.conf[0].item())
                     xyxy = box.xyxy[0].cpu().numpy()  # [x1, y1, x2, y2]
 
+                    w_box = float(xyxy[2] - xyxy[0])
+                    h_box = float(xyxy[3] - xyxy[1])
+
+                    # Filter out tiny noise and horizontal artifacts (e.g. banners, ground lines)
+                    if h_box < 10 or w_box < 3 or (w_box > 1.65 * h_box):
+                        continue
+
                     # Foot contact point is bottom-center of bounding box
                     u_foot = float((xyxy[0] + xyxy[2]) / 2.0)
                     v_foot = float(xyxy[3])
 
-                    # Project to pitch coordinates [0.0, 1.0]
-                    pitch_x, pitch_y = self.homography.project_point(u_foot, v_foot)
+                    # Filter out spectators / bench: foot must be on or near the playable pitch
+                    if pitch_contour is not None:
+                        poly_dist = cv2.pointPolygonTest(pitch_contour, (u_foot, v_foot), True)
+                        if poly_dist < -20.0:  # More than 20px outside the playing pitch
+                            continue
+                    elif has_grass:
+                        u_idx = int(np.clip(u_foot, 0, width - 1))
+                        v_idx = int(np.clip(v_foot, 0, height - 1))
+                        if grass_mask[v_idx, u_idx] == 0:
+                            continue
+
+                    # Safe projection into canonical pitch space without artificial boundary clamping
+                    pitch_x, pitch_y, is_on_pitch = self.homography.project_point_safe(u_foot, v_foot)
+                    if not is_on_pitch or pitch_x is None or pitch_y is None:
+                        continue
 
                     # Extract torso color for team clustering
                     color = self.classifier.extract_torso_color(frame, xyxy)
