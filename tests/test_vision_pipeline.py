@@ -1,6 +1,7 @@
 """Unit tests for the video perception and game state reconstruction vision pipeline."""
 
 import unittest
+import cv2
 import numpy as np
 import pandas as pd
 
@@ -86,6 +87,37 @@ class TestPitchMarkingDetector(unittest.TestCase):
             self.assertEqual(len(src_quad), 4)
             self.assertEqual(len(dst_quad), 4)
 
+    def test_detect_halfway_line(self):
+        # Green frame with a clear vertical transverse line in the middle
+        h, w = 240, 320
+        frame = np.full((h, w, 3), [40, 160, 40], dtype=np.uint8)
+        # Draw vertical white line (halfway line) at x = 160
+        frame[20:220, 158:162] = [255, 255, 255]
+        # Draw center circle segment
+        cv2.circle(frame, (160, 120), 35, (255, 255, 255), 2)
+
+        _grass, white_lines, contour = PitchMarkingDetector.extract_grass_and_lines(frame)
+        line, conf = PitchMarkingDetector.detect_halfway_line(frame, white_lines, contour)
+        self.assertIsNotNone(line)
+        self.assertGreater(conf, 0.40)
+        (pt_top, pt_bot) = line
+        mid_x = (pt_top[0] + pt_bot[0]) / 2.0
+        self.assertAlmostEqual(mid_x, 160.0, delta=10.0)
+
+    def test_detect_d_line_curvature(self):
+        # Green frame with a penalty D arc
+        h, w = 240, 320
+        frame = np.full((h, w, 3), [40, 160, 40], dtype=np.uint8)
+        # Draw arc curving towards the right (+u, towards midfield) -> Left Penalty D
+        # cv2.ellipse: center, axes (major/minor), angle, startAngle, endAngle, color, thickness
+        cv2.ellipse(frame, (120, 120), (35, 45), 0, -60, 60, (255, 255, 255), 3)
+
+        _grass, white_lines, contour = PitchMarkingDetector.extract_grass_and_lines(frame)
+        d_res, conf = PitchMarkingDetector.detect_d_line(frame, white_lines, contour)
+        self.assertIsNotNone(d_res)
+        self.assertEqual(d_res["side"], "left")
+        self.assertGreater(conf, 0.30)
+
 
 class TestCameraMotionTracker(unittest.TestCase):
     """Test inter-frame homography motion tracking."""
@@ -131,6 +163,33 @@ class TestJerseyClassifier(unittest.TestCase):
         team_blue = classifier.predict_team("P3", None)
         self.assertNotEqual(team_red, team_blue)
 
+        hex_colors = classifier.get_team_hex_colors()
+        self.assertTrue(hex_colors["home"].startswith("#"))
+        self.assertTrue(hex_colors["away"].startswith("#"))
+
+    def test_referee_outlier_rejection(self):
+        classifier = JerseyClassifier()
+        # 5 Red players, 5 Blue players, 1 fluorescent yellow referee
+        samples = []
+        for i in range(5):
+            samples.append((f"H_{i}", np.array([220.0, 35.0, 35.0])))
+            samples.append((f"A_{i}", np.array([30.0, 40.0, 220.0])))
+        # Referee wearing neon yellow (High R and High G, Low B)
+        samples.append(("REF_1", np.array([245.0, 245.0, 10.0])))
+
+        classifier.fit_teams(samples)
+        # The two team colors must remain Red and Blue, not yellow!
+        c_home = classifier.team_colors["home"]
+        c_away = classifier.team_colors["away"]
+
+        # One should be high-red/low-blue, the other high-blue/low-red
+        is_red_blue = (
+            (c_home[0] > 160 and c_away[2] > 160) or
+            (c_home[2] > 160 and c_away[0] > 160)
+        )
+        self.assertTrue(is_red_blue, f"Clusters unexpectedly tainted: {c_home}, {c_away}")
+
 
 if __name__ == "__main__":
     unittest.main()
+

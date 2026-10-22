@@ -163,6 +163,7 @@ class VideoAnalysisPipeline:
             "total_video_frames": total_vid_frames,
             "tracking_rows": len(tracking_df),
             "tracking_file": str(output_csv),
+            "team_colors": getattr(tracker, "team_colors", {"home": "#E62325", "away": "#034694"}),
             "possession_share": {"home": home_pct, "away": away_pct},
             "average_tas": avg_tas,
             "sample_insights": frame_insights[:100],

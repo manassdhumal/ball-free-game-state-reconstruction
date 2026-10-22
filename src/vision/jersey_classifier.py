@@ -126,6 +126,19 @@ class JerseyClassifier:
             return
 
         unique_players = list(player_samples_map.keys())
+        if len(unique_players) < 2:
+            # Single player detected in clip: assign to home team, set contrasting away color
+            single_rgb = np.median(player_samples_map[unique_players[0]], axis=0)
+            self.team_colors[self.team_names[0]] = single_rgb
+            # Contrasting color: invert or hue shift
+            contrasting = np.array([255 - single_rgb[0], 255 - single_rgb[1], 255 - single_rgb[2]])
+            self.team_colors[self.team_names[1]] = contrasting
+            self._team_lab_centers[self.team_names[0]] = self._rgb_to_lab(single_rgb)
+            self._team_lab_centers[self.team_names[1]] = self._rgb_to_lab(contrasting)
+            self._player_team_cache[unique_players[0]] = self.team_names[0]
+            self._fitted = True
+            return
+
         player_median_rgbs = []
         player_median_labs = []
 
@@ -140,8 +153,9 @@ class JerseyClassifier:
 
         criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.5)
 
-        # If we have enough players, cluster into 3 to isolate referee/goalkeeper outliers
+        # If we have enough players (>=6), cluster into 3 to isolate referee/goalkeeper outliers
         k_clusters = 3 if len(unique_players) >= 6 else 2
+        k_clusters = min(k_clusters, len(unique_players))
         _, labels, centers = cv2.kmeans(
             player_labs, k_clusters, None, criteria, 10, cv2.KMEANS_PP_CENTERS
         )

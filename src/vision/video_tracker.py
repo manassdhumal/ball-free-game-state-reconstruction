@@ -237,6 +237,7 @@ class VideoGameStateTracker:
         if progress_callback:
             progress_callback(0.80, "Classifying player team affiliations")
         self.classifier.fit_teams(player_colors)
+        self.team_colors = self.classifier.get_team_hex_colors()
 
         # Phase 3: Construct canonical tall tracking table
         canonical_rows = []

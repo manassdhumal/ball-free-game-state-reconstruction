@@ -12,7 +12,7 @@ import cv2
 
 
 class PitchMarkingDetector:
-    """Detects white pitch markings and field boundaries on green football turf."""
+    """Detects white pitch markings, halfway line, penalty D-arcs, and field boundaries."""
 
     @staticmethod
     def extract_grass_and_lines(
@@ -28,7 +28,7 @@ class PitchMarkingDetector:
 
         # Broad HSV range for football grass across various lighting and camera grades
         grass = (
-            (hsv[:, :, 0] >= 25) & (hsv[:, :, 0] <= 90) &
+            (hsv[:, :, 0] >= 25) & (hsv[:, :, 0] <= 92) &
             (hsv[:, :, 1] >= 20) &
             (hsv[:, :, 2] >= 20)
         )
@@ -51,21 +51,159 @@ class PitchMarkingDetector:
 
         # White lines: high intensity and low saturation within the playing field surface
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
-        grass_gray = gray[grass] if np.any(grass) else gray
-        white_thresh = max(160, int(np.percentile(grass_gray, 92))) if len(grass_gray) > 0 else 180
-
-        # Pitch area: enclosed within the pitch contour or cleaned grass surface
+        
+        # Pitch area mask
         pitch_area = (grass_cleaned > 0)
         if pitch_contour is not None:
             c_mask = np.zeros((h, w), dtype=np.uint8)
             cv2.drawContours(c_mask, [pitch_contour], -1, 255, -1)
             pitch_area = (c_mask > 0)
 
-        # White pitch markings have high luminance, low color saturation, and lie on the pitch
-        white_lines = (gray >= white_thresh) & (hsv[:, :, 1] <= 70) & pitch_area
+        # White Top-Hat morphological filter to extract thin white lines even in stadium shadow
+        line_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (7, 7))
+        tophat = cv2.morphologyEx(gray, cv2.MORPH_TOPHAT, line_kernel)
+        
+        # Threshold for white markings: high brightness or strong ridge response on low saturation turf
+        grass_gray = gray[pitch_area] if np.any(pitch_area) else gray
+        white_thresh = max(150, int(np.percentile(grass_gray, 90))) if len(grass_gray) > 0 else 170
+
+        white_lines = (
+            ((gray >= white_thresh) | (tophat >= 24)) &
+            (hsv[:, :, 1] <= 78) &
+            pitch_area
+        )
         white_line_mask = (white_lines.astype(np.uint8) * 255)
 
         return grass_cleaned, white_line_mask, pitch_contour
+
+    @classmethod
+    def detect_halfway_line(
+        cls,
+        frame: np.ndarray,
+        white_line_mask: np.ndarray,
+        pitch_contour: Optional[np.ndarray],
+    ) -> Tuple[Optional[Tuple[Tuple[float, float], Tuple[float, float]]], float]:
+        """Detect the midfield halfway line (canonical X = 0.50).
+
+        Returns:
+            ((top_point, bot_point), confidence)
+        """
+        h, w = frame.shape[:2]
+        edges = cv2.Canny(white_line_mask, 50, 150)
+        min_line_len = max(40, int(h * 0.22))
+        lines = cv2.HoughLinesP(edges, 1, np.pi / 180, threshold=40, minLineLength=min_line_len, maxLineGap=25)
+
+        if lines is None:
+            return None, 0.0
+
+        candidates = []
+        for line in lines:
+            x1, y1, x2, y2 = line.flatten()
+            dx = x2 - x1
+            dy = y2 - y1
+            length = float(np.hypot(dx, dy))
+            angle = float(np.abs(np.arctan2(dy, dx) * 180.0 / np.pi))
+
+            # Transverse line angle (approx vertical in camera perspective)
+            if 62.0 <= angle <= 118.0:
+                # Ensure top point has smaller y
+                pt_top = (float(x1), float(y1)) if y1 < y2 else (float(x2), float(y2))
+                pt_bot = (float(x2), float(y2)) if y1 < y2 else (float(x1), float(y1))
+                mid_x = (pt_top[0] + pt_bot[0]) / 2.0
+
+                # Score candidate: longer lines and lines near center circle or middle of pitch
+                score = length / max(h, 1)
+
+                # Check for center circle arc evidence near the line midpoint
+                mid_y = int((pt_top[1] + pt_bot[1]) / 2.0)
+                circle_region_w = int(w * 0.15)
+                cx1 = max(0, int(mid_x) - circle_region_w)
+                cx2 = min(w, int(mid_x) + circle_region_w)
+                cy1 = max(0, mid_y - int(h * 0.15))
+                cy2 = min(h, mid_y + int(h * 0.15))
+                sub_mask = white_line_mask[cy1:cy2, cx1:cx2]
+                if np.sum(sub_mask > 0) > 100:
+                    score += 0.35  # Bonus for center circle markings
+
+                candidates.append(((pt_top, pt_bot), score))
+
+        if not candidates:
+            return None, 0.0
+
+        best_line, best_score = max(candidates, key=lambda c: c[1])
+        conf = min(0.95, best_score)
+        return best_line, conf
+
+    @classmethod
+    def detect_d_line(
+        cls,
+        frame: np.ndarray,
+        white_line_mask: np.ndarray,
+        pitch_contour: Optional[np.ndarray],
+    ) -> Tuple[Optional[Dict[str, Any]], float]:
+        """Detect the penalty 'D' arc and its adjacent 16.5m penalty line.
+
+        Returns:
+            ({"side": "left"|"right", "apex": (u, v), "box_x": u_box}, confidence)
+        """
+        h, w = frame.shape[:2]
+        contours, _ = cv2.findContours(white_line_mask, cv2.RETR_LIST, cv2.CHAIN_APPROX_NONE)
+
+        candidates = []
+        for c in contours:
+            if len(c) < 30:
+                continue
+
+            pts = c.reshape(-1, 2)
+            xs = pts[:, 0]
+            ys = pts[:, 1]
+            span_y = float(np.max(ys) - np.min(ys))
+            span_x = float(np.max(xs) - np.min(xs))
+
+            # Penalty arc covers a moderate vertical and horizontal span
+            if span_y < 0.06 * h or span_y > 0.60 * h or span_x < 0.02 * w or span_x > 0.35 * w:
+                continue
+
+            # Fit 2nd degree polynomial: u = a*v^2 + b*v + c to measure curvature
+            try:
+                poly = np.polyfit(ys, xs, 2)
+                a, b, c_val = poly[0], poly[1], poly[2]
+            except Exception:
+                continue
+
+            # Check significant curvature
+            if abs(a) < 1e-4:
+                continue
+
+            # Parabola vertex: v_vertex = -b / (2a)
+            v_vertex = -b / (2.0 * a)
+            if not (np.min(ys) <= v_vertex <= np.max(ys)):
+                continue
+
+            u_vertex = float(a * (v_vertex ** 2) + b * v_vertex + c_val)
+
+            # Curvature direction:
+            # a < 0 -> Parabola opens left, vertex has maximum u (bulges right towards midfield) -> Left Penalty D
+            # a > 0 -> Parabola opens right, vertex has minimum u (bulges left towards midfield) -> Right Penalty D
+            if a < 0:
+                side = "left"
+                conf = min(0.90, span_y / (0.35 * h))
+            else:
+                side = "right"
+                conf = min(0.90, span_y / (0.35 * h))
+
+            candidates.append({
+                "side": side,
+                "apex": (float(u_vertex), float(v_vertex)),
+                "span_y": span_y,
+                "conf": conf,
+            })
+
+        if not candidates:
+            return None, 0.0
+
+        best = max(candidates, key=lambda c: c["conf"])
+        return best, best["conf"]
 
     @classmethod
     def detect_pitch_geometry(
@@ -75,60 +213,85 @@ class PitchMarkingDetector:
         h, w = frame.shape[:2]
         grass_mask, white_line_mask, pitch_contour = cls.extract_grass_and_lines(frame)
 
-        # Extract line segments via Canny + Probabilistic Hough Transform
+        # 1. Landmark detection: Halfway line (midfield) or Penalty D-arc
+        half_line, half_conf = cls.detect_halfway_line(frame, white_line_mask, pitch_contour)
+        d_line, d_conf = cls.detect_d_line(frame, white_line_mask, pitch_contour)
+
+        # Detect longitudinal touchlines (sidelines)
         edges = cv2.Canny(white_line_mask, 50, 150)
-        min_line_len = max(30, int(min(w, h) * 0.05))
-        lines = cv2.HoughLinesP(edges, 1, np.pi / 180, threshold=35, minLineLength=min_line_len, maxLineGap=20)
-
-        if lines is not None and len(lines) >= 4:
-            horizontal_lines: List[Tuple[int, int, int, int, float]] = []
-            vertical_lines: List[Tuple[int, int, int, int, float]] = []
-
-            for line in lines:
-                x1, y1, x2, y2 = line.flatten()
+        lines = cv2.HoughLinesP(edges, 1, np.pi / 180, threshold=35, minLineLength=max(30, int(w * 0.15)), maxLineGap=30)
+        horizontal_lines = []
+        if lines is not None:
+            for l in lines:
+                x1, y1, x2, y2 = l.flatten()
                 dx = x2 - x1
                 dy = y2 - y1
                 length = float(np.hypot(dx, dy))
                 angle = float(np.abs(np.arctan2(dy, dx) * 180.0 / np.pi))
-
                 if angle < 28 or angle > 152:
                     horizontal_lines.append((x1, y1, x2, y2, length))
-                elif 62 < angle < 118:
-                    vertical_lines.append((x1, y1, x2, y2, length))
 
-            if len(horizontal_lines) >= 2 and len(vertical_lines) >= 1:
-                # Longitudinal sidelines (near top and near bottom)
-                y_pts = []
-                for x1, y1, x2, y2, _ in horizontal_lines:
-                    y_pts.extend([y1, y2])
-                top_y = float(np.percentile(y_pts, 8))
-                bot_y = float(np.percentile(y_pts, 92))
+        y_top = 0.12 * h
+        y_bot = 0.90 * h
+        if horizontal_lines:
+            y_pts = [y for _, y1, _, y2, _ in horizontal_lines for y in (y1, y2)]
+            y_top = float(np.percentile(y_pts, 10))
+            y_bot = float(np.percentile(y_pts, 90))
 
-                # Transverse pitch lines (left and right bounds)
-                x_pts = []
-                for x1, y1, x2, y2, _ in vertical_lines:
-                    x_pts.extend([x1, x2])
-                left_x = float(np.percentile(x_pts, 8))
-                right_x = float(np.percentile(x_pts, 92))
+        # Case A: Halfway line is visible -> Anchor canonical X = 0.50
+        if half_line is not None and half_conf >= 0.35:
+            (u_top, _), (u_bot, _) = half_line
+            u_mid = (u_top + u_bot) / 2.0
+            # Broadcast camera typically displays a ~48% horizontal pitch window
+            est_window = 0.48
+            x_left = max(0.02, 0.50 - (u_mid / w) * est_window)
+            x_right = min(0.98, x_left + est_window)
 
-                # If the span covers a valid football viewport
-                if (right_x - left_x) > 0.3 * w and (bot_y - top_y) > 0.25 * h:
-                    src_quad = [
-                        (left_x, top_y),
-                        (right_x, top_y),
-                        (right_x, bot_y),
-                        (left_x, bot_y),
-                    ]
-                    # Target pitch coordinates
-                    dst_quad = [
-                        (0.08, 0.08),
-                        (0.92, 0.08),
-                        (0.92, 0.92),
-                        (0.08, 0.92),
-                    ]
-                    return src_quad, dst_quad
+            src_quad = [
+                (0.04 * w, y_top),
+                (0.96 * w, y_top),
+                (0.96 * w, y_bot),
+                (0.04 * w, y_bot),
+            ]
+            dst_quad = [
+                (x_left, 0.05),
+                (x_right, 0.05),
+                (x_right, 0.95),
+                (x_left, 0.95),
+            ]
+            return src_quad, dst_quad
 
-        # Fallback to pitch contour convex hull if explicit line clustering is ambiguous
+        # Case B: Penalty D-line is visible -> Anchor attacking/defending third
+        if d_line is not None and d_conf >= 0.35:
+            u_apex, _v_apex = d_line["apex"]
+            if d_line["side"] == "left":
+                # Left Penalty D arc apex is at canonical X ≈ 0.192
+                x_apex_canonical = 0.192
+                est_window = 0.45
+                x_left = max(0.01, x_apex_canonical - (u_apex / w) * est_window)
+                x_right = min(0.99, x_left + est_window)
+            else:
+                # Right Penalty D arc apex is at canonical X ≈ 0.808
+                x_apex_canonical = 0.808
+                est_window = 0.45
+                x_left = max(0.01, x_apex_canonical - (u_apex / w) * est_window)
+                x_right = min(0.99, x_left + est_window)
+
+            src_quad = [
+                (0.04 * w, y_top),
+                (0.96 * w, y_top),
+                (0.96 * w, y_bot),
+                (0.04 * w, y_bot),
+            ]
+            dst_quad = [
+                (x_left, 0.05),
+                (x_right, 0.05),
+                (x_right, 0.95),
+                (x_left, 0.95),
+            ]
+            return src_quad, dst_quad
+
+        # Case C: Fallback to pitch contour convex hull
         if pitch_contour is not None:
             rect = cv2.minAreaRect(pitch_contour)
             box = cv2.boxPoints(rect)
@@ -148,7 +311,7 @@ class PitchMarkingDetector:
 
 
 class CameraMotionTracker:
-    """Tracks camera pan, tilt, and zoom across consecutive frames to maintain accurate pitch mapping."""
+    """Tracks camera pan, tilt, and zoom across consecutive frames and calibrates with pitch markings."""
 
     def __init__(self, initial_homography: PitchHomography) -> None:
         self.current_homography = initial_homography
@@ -160,7 +323,10 @@ class CameraMotionTracker:
         frame: np.ndarray,
         player_boxes: Optional[Sequence[Sequence[float]]] = None,
     ) -> PitchHomography:
-        """Update homography by computing inter-frame camera motion on the static pitch background."""
+        """Update homography by computing inter-frame camera motion on the static pitch background
+
+        and dynamically re-anchoring with detected halfway lines or penalty D markings.
+        """
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
         if self.prev_gray is None:
             self.prev_gray = gray
@@ -205,8 +371,20 @@ class CameraMotionTracker:
                         except np.linalg.LinAlgError:
                             pass
 
+        # Landmark Re-Anchoring: Check for pitch markings (halfway line or D-line) to eliminate optical flow drift
+        src_quad, dst_quad = PitchMarkingDetector.detect_pitch_geometry(frame)
+        if src_quad is not None and dst_quad is not None:
+            try:
+                landmark_homography = PitchHomography.from_four_points(src_quad, dst_quad)
+                # Exponential blend: 70% motion tracking continuity + 30% landmark anchoring
+                blended_matrix = 0.70 * self.current_homography.matrix + 0.30 * landmark_homography.matrix
+                self.current_homography = PitchHomography(blended_matrix)
+            except Exception:
+                pass
+
         self.prev_gray = gray
         return self.current_homography
+
 
 
 class PitchHomography:
