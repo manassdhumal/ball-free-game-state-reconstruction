@@ -107,6 +107,7 @@ class VideoGameStateTracker:
 
         raw_detections: List[Dict[str, Any]] = []
         player_colors: List[tuple[str, np.ndarray]] = []
+        track_foot_smooth: Dict[str, Tuple[float, float]] = {}
         frame_idx = 0
         processed_count = 0
 
@@ -172,38 +173,47 @@ class VideoGameStateTracker:
                     w_box = float(xyxy[2] - xyxy[0])
                     h_box = float(xyxy[3] - xyxy[1])
 
-                    # Filter out only severe non-human artifacts (keep small distant broadcast players)
-                    min_h = max(5, int(height * 0.008))
-                    if h_box < min_h or w_box < 3 or (w_box > 3.8 * h_box):
+                    # Filter out severe non-human artifacts
+                    min_h = max(6, int(height * 0.009))
+                    if h_box < min_h or w_box < 3 or (w_box > 3.0 * h_box):
                         continue
 
-                    # Foot contact point is bottom-center of bounding box
-                    u_foot = float((xyxy[0] + xyxy[2]) / 2.0)
-                    v_foot = float(xyxy[3])
+                    # Foot contact point with persistent temporal EMA smoothing
+                    u_raw = float((xyxy[0] + xyxy[2]) / 2.0)
+                    v_raw = float(xyxy[3])
+                    player_key = str(track_id)
 
-                    # Generous pitch contour boundary to avoid dropping sideline and corner players
+                    if player_key in track_foot_smooth:
+                        u_prev, v_prev = track_foot_smooth[player_key]
+                        u_foot = 0.70 * u_raw + 0.30 * u_prev
+                        v_foot = 0.70 * v_raw + 0.30 * v_prev
+                    else:
+                        u_foot = u_raw
+                        v_foot = v_raw
+                    track_foot_smooth[player_key] = (u_foot, v_foot)
+
+                    # Filter linesmen (outside line referees), bench personnel, and photographers
                     if pitch_contour is not None:
                         poly_dist = cv2.pointPolygonTest(pitch_contour, (u_foot, v_foot), True)
-                        if poly_dist < -60.0:  # Permissive margin for touchline players
+                        if poly_dist < -4.0:  # Outside playable turf polygon
+                            continue
+                    elif has_grass:
+                        u_idx = int(np.clip(u_foot, 0, width - 1))
+                        v_idx = int(np.clip(v_foot, 0, height - 1))
+                        if grass_mask[v_idx, u_idx] == 0:
                             continue
 
-                    # Safe projection into canonical pitch space
-                    pitch_x, pitch_y, is_on_pitch = self.homography.project_point_safe(u_foot, v_foot)
-                    if not is_on_pitch or pitch_x is None or pitch_y is None:
-                        # Attempt bounded projection for valid field players standing on pitch borders
-                        raw_proj = self.homography.project_point(u_foot, v_foot)
-                        if raw_proj is not None and 0.0 <= raw_proj[0] <= 1.0 and 0.0 <= raw_proj[1] <= 1.0:
-                            pitch_x, pitch_y = raw_proj
-                        else:
-                            continue
+                    # Unclamped projection into canonical pitch space
+                    raw_x, raw_y = self.homography.project_raw(u_foot, v_foot)
+                    # If outside pitch sidelines or goal lines, DROP (linesmen, sidelines, coaches!)
+                    if raw_x < -0.015 or raw_x > 1.015 or raw_y < -0.015 or raw_y > 1.015:
+                        continue
 
-                    # Clamp strictly to pitch margins for seamless radar rendering
-                    pitch_x = float(np.clip(pitch_x, 0.01, 0.99))
-                    pitch_y = float(np.clip(pitch_y, 0.01, 0.99))
+                    pitch_x = float(np.clip(raw_x, 0.005, 0.995))
+                    pitch_y = float(np.clip(raw_y, 0.005, 0.995))
 
                     # Extract torso color for team clustering
                     color = self.classifier.extract_torso_color(frame, xyxy)
-                    player_key = str(track_id)
                     if color is not None:
                         player_colors.append((player_key, color))
 
@@ -227,7 +237,6 @@ class VideoGameStateTracker:
         cap.release()
 
         if not raw_detections:
-            # Return empty DataFrame with canonical schema
             return pd.DataFrame(columns=[
                 "match_id", "frame", "timestamp", "player_id", "team",
                 "x", "y", "confidence", "visible"
@@ -239,11 +248,18 @@ class VideoGameStateTracker:
         self.classifier.fit_teams(player_colors)
         self.team_colors = self.classifier.get_team_hex_colors()
 
-        # Phase 3: Construct canonical tall tracking table
+        # Phase 3: Construct canonical tall tracking table (Filter out referees!)
         canonical_rows = []
         for det in raw_detections:
             track_id = det["track_id"]
+            # Exclude on-pitch referees from player tracking table
+            if self.classifier.is_referee(track_id, det["color"]):
+                continue
+
             team = self.classifier.predict_team(track_id, det["color"])
+            if team == "referee":
+                continue
+
             canonical_player_id = f"{team.upper()}_{track_id}"
 
             canonical_rows.append({
@@ -260,9 +276,9 @@ class VideoGameStateTracker:
 
         df = pd.DataFrame(canonical_rows)
 
-        # Phase 4: Densify player trajectories so all players maintain persistent radar dots
+        # Phase 4: Densify and smooth player trajectories for butter-smooth natural movement
         if progress_callback:
-            progress_callback(0.88, "Densifying player tracks to eliminate radar flickering...")
+            progress_callback(0.88, "Smoothing player tracks to match gameplay footage...")
         df = self.densify_and_persist_tracks(df, total_frames=processed_count, fps=native_fps)
 
         # Sort canonically by frame and player_id
@@ -278,49 +294,141 @@ class VideoGameStateTracker:
         df: pd.DataFrame,
         total_frames: int,
         fps: float = 25.0,
-        max_interpolation_gap: int = 40,
-        persistence_frames: int = 25,
+        max_interpolation_gap: int = 25,
+        min_track_observations: int = 5,
     ) -> pd.DataFrame:
-        """Densely complete player trajectories across intermediate frames and persist active pitch presence.
+        """Densely complete player trajectories across intermediate frames and smooth movements.
 
-        Guarantees that all active outfield players and goalkeepers maintain persistent, visible dots
-        on the radar throughout the game state reconstruction.
+        Guarantees that all active outfield players and goalkeepers move smoothly and continuously
+        matching video gameplay footage, while eliminating outside linesmen and transient artifacts.
         """
         if df.empty or "player_id" not in df.columns:
             return df
 
-        match_id = df["match_id"].iloc[0] if "match_id" in df.columns else "match"
-        records: List[pd.DataFrame] = []
+        from scipy.signal import savgol_filter
+        from collections import defaultdict
 
+        match_id = df["match_id"].iloc[0] if "match_id" in df.columns else "match"
+
+        # Step 1: Filter outside line referees (linesmen / officials along near or far touchline)
+        track_summaries = []
         for player_id, p_df in df.groupby("player_id", as_index=False):
             p_df = p_df.sort_values("frame").reset_index(drop=True)
-            if p_df.empty:
+            if len(p_df) < min_track_observations:
                 continue
 
-            team = p_df["team"].iloc[0]
-            first_f = int(p_df["frame"].min())
-            last_f = int(p_df["frame"].max())
+            # Outside line referee rejection: linesmen stand strictly on or beyond the touchlines
+            med_y = float(p_df["y"].median())
+            if med_y >= 0.965 or med_y <= 0.035:
+                continue
 
-            # Bounded forward persistence: keep player active if still on pitch
-            target_max_f = min(max(first_f, total_frames - 1), last_f + persistence_frames)
+            track_summaries.append({
+                "original_id": player_id,
+                "team": p_df["team"].iloc[0],
+                "start_f": int(p_df["frame"].min()),
+                "end_f": int(p_df["frame"].max()),
+                "start_x": float(p_df["x"].iloc[0]),
+                "start_y": float(p_df["y"].iloc[0]),
+                "end_x": float(p_df["x"].iloc[-1]),
+                "end_y": float(p_df["y"].iloc[-1]),
+                "df": p_df,
+            })
 
-            # Reindex to continuous range
-            full_frames = pd.DataFrame({"frame": range(first_f, target_max_f + 1)})
-            merged = pd.merge(full_frames, p_df, on="frame", how="left")
+        if not track_summaries:
+            return df
+
+        # Step 2: Spatio-temporal tracklet association (stitch split tracks of the same player)
+        track_summaries.sort(key=lambda t: t["start_f"])
+        id_mapping: Dict[str, str] = {}
+        active_tails: Dict[str, Dict[str, Any]] = {}
+
+        for t in track_summaries:
+            tid = t["original_id"]
+            team = t["team"]
+            st_f = t["start_f"]
+            st_x = t["start_x"]
+            st_y = t["start_y"]
+
+            best_parent = None
+            min_dist = float("inf")
+
+            for parent_id, parent_tail in active_tails.items():
+                if parent_tail["team"] != team:
+                    continue
+                gap = st_f - parent_tail["end_f"]
+                if 1 <= gap <= 40:
+                    dist = float(np.hypot(st_x - parent_tail["end_x"], st_y - parent_tail["end_y"]))
+                    # Maximum physically realistic movement window on pitch (~8-9m/s)
+                    max_allowed = 0.03 + 0.0025 * gap
+                    if dist <= max_allowed and dist < min_dist:
+                        min_dist = dist
+                        best_parent = parent_id
+
+            if best_parent is not None:
+                id_mapping[tid] = best_parent
+                active_tails[best_parent]["end_f"] = max(active_tails[best_parent]["end_f"], t["end_f"])
+                active_tails[best_parent]["end_x"] = t["end_x"]
+                active_tails[best_parent]["end_y"] = t["end_y"]
+            else:
+                id_mapping[tid] = tid
+                active_tails[tid] = {
+                    "team": team,
+                    "end_f": t["end_f"],
+                    "end_x": t["end_x"],
+                    "end_y": t["end_y"],
+                }
+
+        # Group stitched chunks by canonical player ID
+        stitched_dfs: Dict[str, List[pd.DataFrame]] = defaultdict(list)
+        for t in track_summaries:
+            canonical_id = id_mapping[t["original_id"]]
+            p_df = t["df"].copy()
+            p_df["player_id"] = canonical_id
+            stitched_dfs[canonical_id].append(p_df)
+
+        # Step 3: Interpolate within active spans and apply polynomial smoothing
+        records: List[pd.DataFrame] = []
+        for canonical_id, chunks in stitched_dfs.items():
+            combined = pd.concat(chunks, ignore_index=True)
+            combined = combined.drop_duplicates(subset=["frame"]).sort_values("frame").reset_index(drop=True)
+            if len(combined) < min_track_observations:
+                continue
+
+            team = combined["team"].iloc[0]
+            first_f = int(combined["frame"].min())
+            last_f = int(combined["frame"].max())
+
+            # Reindex to continuous frame span
+            full_frames = pd.DataFrame({"frame": range(first_f, last_f + 1)})
+            merged = pd.merge(full_frames, combined, on="frame", how="left")
 
             merged["match_id"] = match_id
-            merged["player_id"] = player_id
+            merged["player_id"] = canonical_id
             merged["team"] = team
-            merged["x"] = merged["x"].interpolate(method="linear", limit=max_interpolation_gap).ffill().bfill()
-            merged["y"] = merged["y"].interpolate(method="linear", limit=max_interpolation_gap).ffill().bfill()
-            merged["confidence"] = merged["confidence"].interpolate(method="linear").fillna(0.70)
-            merged["visible"] = True
+            merged["x"] = merged["x"].interpolate(method="linear", limit=max_interpolation_gap)
+            merged["y"] = merged["y"].interpolate(method="linear", limit=max_interpolation_gap)
+            merged["confidence"] = merged["confidence"].interpolate(method="linear").fillna(0.75)
+            merged["visible"] = merged["x"].notna()
             merged["timestamp"] = (merged["frame"] / max(fps, 1.0)).round(4)
 
-            # Drop any lingering NaN coordinates
-            merged = merged.dropna(subset=["x", "y"])
-            if not merged.empty:
-                records.append(merged)
+            # Drop any lingering NaN coordinates beyond max interpolation gap
+            merged = merged.dropna(subset=["x", "y"]).reset_index(drop=True)
+            if len(merged) < min_track_observations:
+                continue
+
+            # Savitzky-Golay smoothing along trajectory
+            x_arr = merged["x"].values.copy()
+            y_arr = merged["y"].values.copy()
+            n_pts = len(merged)
+
+            if n_pts >= 7:
+                merged["x"] = np.clip(savgol_filter(x_arr, window_length=7, polyorder=2), 0.005, 0.995)
+                merged["y"] = np.clip(savgol_filter(y_arr, window_length=7, polyorder=2), 0.005, 0.995)
+            elif n_pts >= 3:
+                merged["x"] = np.clip(merged["x"].rolling(3, min_periods=1, center=True).mean(), 0.005, 0.995)
+                merged["y"] = np.clip(merged["y"].rolling(3, min_periods=1, center=True).mean(), 0.005, 0.995)
+
+            records.append(merged)
 
         if not records:
             return df
@@ -328,3 +436,4 @@ class VideoGameStateTracker:
         dense_df = pd.concat(records, ignore_index=True)
         dense_df = dense_df.sort_values(by=["frame", "player_id"]).reset_index(drop=True)
         return dense_df
+

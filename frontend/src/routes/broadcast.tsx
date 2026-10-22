@@ -303,11 +303,55 @@ function VideoReconstructionStudio() {
     }
   };
 
-  // Load frame tracking data when currentFrame changes
+  const allFramesRef = useRef<Record<number, Player[]>>({});
+
+  // Pre-fetch all tracking frames for instantaneous zero-latency playback
   useEffect(() => {
     if (!analysisResult) return;
     const matchId = analysisResult.match_id;
 
+    apiFetch<{ frames: Record<string, Array<{ player_id: string; team: string; x: number | null; y: number | null }>> }>(
+      `/game-state/${matchId}/all`
+    )
+      .then((res) => {
+        if (res.frames) {
+          const cache: Record<number, Player[]> = {};
+          for (const [fStr, players] of Object.entries(res.frames)) {
+            const fNum = Number(fStr);
+            cache[fNum] = (players || [])
+              .filter((p) => p.x !== null && p.y !== null)
+              .map((p, idx) => ({
+                id: p.player_id,
+                team: (p.team === "home" || p.team === "away" ? p.team : "home") as "home" | "away",
+                number: idx + 1,
+                name: p.player_id,
+                role: "Field",
+                x: (p.x ?? 0.5) * 105,
+                y: (p.y ?? 0.5) * 68,
+                vx: 0,
+                vy: 0,
+                visible: true,
+              }));
+          }
+          allFramesRef.current = cache;
+          if (cache[currentFrame]) {
+            setFramePlayers(cache[currentFrame]);
+          }
+        }
+      })
+      .catch(() => {});
+  }, [analysisResult]);
+
+  // Load frame tracking data with instant memory lookup
+  useEffect(() => {
+    if (!analysisResult) return;
+    const cached = allFramesRef.current[currentFrame];
+    if (cached && cached.length > 0) {
+      setFramePlayers(cached);
+      return;
+    }
+
+    const matchId = analysisResult.match_id;
     apiFetch<{ players: Array<{ player_id: string; team: string; x: number | null; y: number | null }> }>(
       `/game-state/${matchId}/${currentFrame}`
     )
@@ -320,7 +364,6 @@ function VideoReconstructionStudio() {
             number: idx + 1,
             name: p.player_id,
             role: "Field",
-            // Convert normalized pitch coordinates [0, 1] to meters (105 x 68) for the Pitch component
             x: (p.x ?? 0.5) * 105,
             y: (p.y ?? 0.5) * 68,
             vx: 0,
@@ -329,10 +372,39 @@ function VideoReconstructionStudio() {
           }));
         setFramePlayers(mapped);
       })
-      .catch(() => {
-        // Fallback or missing frame handled gracefully
-      });
+      .catch(() => {});
   }, [analysisResult, currentFrame]);
+
+  // 60FPS fluid playback sync loop
+  useEffect(() => {
+    let animId: number;
+    const syncLoop = () => {
+      if (videoRef.current && isPlaying && analysisResult) {
+        const curTime = videoRef.current.currentTime;
+        const computedFrame = Math.min(maxProcessedFrame, Math.round(curTime * fps));
+        setCurrentFrame((prev) => {
+          if (prev !== computedFrame) {
+            const cached = allFramesRef.current[computedFrame];
+            if (cached && cached.length > 0) {
+              setFramePlayers(cached);
+            }
+            return computedFrame;
+          }
+          return prev;
+        });
+      }
+      if (isPlaying) {
+        animId = requestAnimationFrame(syncLoop);
+      }
+    };
+
+    if (isPlaying) {
+      animId = requestAnimationFrame(syncLoop);
+    }
+    return () => {
+      if (animId) cancelAnimationFrame(animId);
+    };
+  }, [isPlaying, analysisResult, maxProcessedFrame, fps]);
 
   // Synchronized playback controls
   const togglePlay = () => {
@@ -348,6 +420,10 @@ function VideoReconstructionStudio() {
   const handleSeekFrame = (targetFrame: number) => {
     const clamped = Math.max(0, Math.min(maxProcessedFrame, targetFrame));
     setCurrentFrame(clamped);
+    const cached = allFramesRef.current[clamped];
+    if (cached && cached.length > 0) {
+      setFramePlayers(cached);
+    }
     if (videoRef.current) {
       videoRef.current.currentTime = clamped / fps;
     }
@@ -358,6 +434,10 @@ function VideoReconstructionStudio() {
     const curTime = videoRef.current.currentTime;
     const computedFrame = Math.min(maxProcessedFrame, Math.round(curTime * fps));
     setCurrentFrame(computedFrame);
+    const cached = allFramesRef.current[computedFrame];
+    if (cached && cached.length > 0) {
+      setFramePlayers(cached);
+    }
   };
 
   const handleSpeedChange = (speed: number) => {

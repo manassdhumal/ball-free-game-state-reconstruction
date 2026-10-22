@@ -34,6 +34,33 @@ def match(match_id: str):
     return {"availability": {"status": "available"}, "data": found[0]}
 
 
+@router.get("/game-state/{match_id}/all")
+def game_state_all(match_id: str):
+    """Retrieve full player tracking positions mapped per frame for instantaneous zero-latency playback."""
+    try:
+        df = data.tracking(match_id)
+        frames_dict: dict[int, list[dict[str, Any]]] = {}
+        for row in df.itertuples(index=False):
+            f = int(row.frame)
+            if f not in frames_dict:
+                frames_dict[f] = []
+            pid = str(row.player_id)
+            if not pid.startswith(f"{str(row.team).upper()}_"):
+                pid = f"{str(row.team).upper()}_{pid}"
+            conf = getattr(row, "confidence", 1.0)
+            frames_dict[f].append({
+                "player_id": pid,
+                "team": row.team,
+                "x": None if pd.isna(row.x) else float(row.x),
+                "y": None if pd.isna(row.y) else float(row.y),
+                "confidence": 1.0 if pd.isna(conf) else float(conf),
+                "visible": bool(getattr(row, "visible", True)),
+            })
+        return {"match_id": match_id, "frames": frames_dict}
+    except (KeyError, FileNotFoundError) as exc:
+        raise _not_found(exc) from exc
+
+
 @router.get("/game-state/{match_id}/{frame_number}")
 def game_state(match_id: str, frame_number: int):
     try:

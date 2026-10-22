@@ -217,77 +217,96 @@ class PitchMarkingDetector:
         half_line, half_conf = cls.detect_halfway_line(frame, white_line_mask, pitch_contour)
         d_line, d_conf = cls.detect_d_line(frame, white_line_mask, pitch_contour)
 
-        # Detect longitudinal touchlines (sidelines)
-        edges = cv2.Canny(white_line_mask, 50, 150)
-        lines = cv2.HoughLinesP(edges, 1, np.pi / 180, threshold=35, minLineLength=max(30, int(w * 0.15)), maxLineGap=30)
-        horizontal_lines = []
-        if lines is not None:
-            for l in lines:
-                x1, y1, x2, y2 = l.flatten()
-                dx = x2 - x1
-                dy = y2 - y1
-                length = float(np.hypot(dx, dy))
-                angle = float(np.abs(np.arctan2(dy, dx) * 180.0 / np.pi))
-                if angle < 28 or angle > 152:
-                    horizontal_lines.append((x1, y1, x2, y2, length))
+        # Baseline sideline vertical limits
+        v_top = 0.14 * h
+        v_bot = 0.90 * h
 
-        y_top = 0.12 * h
-        y_bot = 0.90 * h
-        if horizontal_lines:
-            y_pts = [y for _, y1, _, y2, _ in horizontal_lines for y in (y1, y2)]
-            y_top = float(np.percentile(y_pts, 10))
-            y_bot = float(np.percentile(y_pts, 90))
+        # If halfway line is detected, its endpoints directly touch the far & near touchlines!
+        if half_line is not None and half_conf >= 0.35:
+            (u_top_pt, v_top_pt), (u_bot_pt, v_bot_pt) = half_line
+            if v_top_pt > v_bot_pt:
+                u_top_pt, u_bot_pt = u_bot_pt, u_top_pt
+                v_top_pt, v_bot_pt = v_bot_pt, v_top_pt
+
+            if (v_bot_pt - v_top_pt) >= 0.40 * h:
+                v_top = float(v_top_pt)
+                v_bot = float(v_bot_pt)
+        else:
+            # Fallback: Detect longitudinal touchlines (sidelines)
+            edges = cv2.Canny(white_line_mask, 50, 150)
+            lines = cv2.HoughLinesP(edges, 1, np.pi / 180, threshold=35, minLineLength=max(30, int(w * 0.15)), maxLineGap=30)
+            if lines is not None:
+                top_candidates = []
+                bot_candidates = []
+                for l in lines:
+                    x1, y1, x2, y2 = l.flatten()
+                    dx = x2 - x1
+                    dy = y2 - y1
+                    angle = float(np.abs(np.arctan2(dy, dx) * 180.0 / np.pi))
+                    if angle < 28 or angle > 152:
+                        y_mid = (y1 + y2) / 2.0
+                        if y_mid <= 0.45 * h:
+                            top_candidates.append(y_mid)
+                        elif y_mid >= 0.60 * h:
+                            bot_candidates.append(y_mid)
+
+                if top_candidates:
+                    v_top = float(np.median(top_candidates))
+                if bot_candidates:
+                    v_bot = float(np.median(bot_candidates))
+
+                if (v_bot - v_top) < 0.42 * h:
+                    v_top = 0.14 * h
+                    v_bot = 0.90 * h
+
+        u_center = w / 2.0
+        # Broadcast cameras view pitch with trapezoidal perspective foreshortening
+        top_left_u = max(0.02 * w, u_center - (u_center - 0.05 * w) * 0.85)
+        top_right_u = min(0.98 * w, u_center + (0.95 * w - u_center) * 0.85)
 
         # Case A: Halfway line is visible -> Anchor canonical X = 0.50
         if half_line is not None and half_conf >= 0.35:
             (u_top, _), (u_bot, _) = half_line
-            u_mid = (u_top + u_bot) / 2.0
-            # Broadcast camera typically displays a ~48% horizontal pitch window
             est_window = 0.48
-            x_left = max(0.02, 0.50 - (u_mid / w) * est_window)
-            x_right = min(0.98, x_left + est_window)
+            x_top_left = max(0.01, 0.50 - (u_top / w) * est_window)
+            x_top_right = min(0.99, x_top_left + est_window)
+
+            x_bot_left = max(0.01, 0.50 - (u_bot / w) * est_window)
+            x_bot_right = min(0.99, x_bot_left + est_window)
 
             src_quad = [
-                (0.04 * w, y_top),
-                (0.96 * w, y_top),
-                (0.96 * w, y_bot),
-                (0.04 * w, y_bot),
+                (0.04 * w, v_top),
+                (0.96 * w, v_top),
+                (0.96 * w, v_bot),
+                (0.04 * w, v_bot),
             ]
             dst_quad = [
-                (x_left, 0.05),
-                (x_right, 0.05),
-                (x_right, 0.95),
-                (x_left, 0.95),
+                (x_top_left, 0.00),
+                (x_top_right, 0.00),
+                (x_bot_right, 1.00),
+                (x_bot_left, 1.00),
             ]
             return src_quad, dst_quad
 
         # Case B: Penalty D-line is visible -> Anchor attacking/defending third
         if d_line is not None and d_conf >= 0.35:
             u_apex, _v_apex = d_line["apex"]
-            if d_line["side"] == "left":
-                # Left Penalty D arc apex is at canonical X ≈ 0.192
-                x_apex_canonical = 0.192
-                est_window = 0.45
-                x_left = max(0.01, x_apex_canonical - (u_apex / w) * est_window)
-                x_right = min(0.99, x_left + est_window)
-            else:
-                # Right Penalty D arc apex is at canonical X ≈ 0.808
-                x_apex_canonical = 0.808
-                est_window = 0.45
-                x_left = max(0.01, x_apex_canonical - (u_apex / w) * est_window)
-                x_right = min(0.99, x_left + est_window)
+            est_window = 0.45
+            x_apex = 0.192 if d_line["side"] == "left" else 0.808
+            x_left = max(0.01, x_apex - (u_apex / w) * est_window)
+            x_right = min(0.99, x_left + est_window)
 
             src_quad = [
-                (0.04 * w, y_top),
-                (0.96 * w, y_top),
-                (0.96 * w, y_bot),
-                (0.04 * w, y_bot),
+                (top_left_u, v_top),
+                (top_right_u, v_top),
+                (0.96 * w, v_bot),
+                (0.04 * w, v_bot),
             ]
             dst_quad = [
-                (x_left, 0.05),
-                (x_right, 0.05),
-                (x_right, 0.95),
-                (x_left, 0.95),
+                (x_left, 0.00),
+                (x_right, 0.00),
+                (x_right, 1.00),
+                (x_left, 1.00),
             ]
             return src_quad, dst_quad
 
@@ -304,19 +323,20 @@ class PitchMarkingDetector:
                 (float(bot_two[0][0]), float(bot_two[0][1])),
                 (float(bot_two[1][0]), float(bot_two[1][1])),
             ]
-            dst_quad = [(0.05, 0.05), (0.95, 0.05), (0.95, 0.95), (0.05, 0.95)]
+            dst_quad = [(0.01, 0.01), (0.99, 0.01), (0.99, 0.99), (0.01, 0.99)]
             return src_quad, dst_quad
 
         return None, None
 
 
 class CameraMotionTracker:
-    """Tracks camera pan, tilt, and zoom across consecutive frames and calibrates with pitch markings."""
+    """Tracks camera pan, tilt, and zoom across consecutive frames with smooth pitch landmark calibration."""
 
     def __init__(self, initial_homography: PitchHomography) -> None:
         self.current_homography = initial_homography
         self.prev_gray: Optional[np.ndarray] = None
         self.cumulative_transform = np.eye(3, dtype=np.float64)
+        self._frame_count = 0
 
     def update(
         self,
@@ -325,9 +345,10 @@ class CameraMotionTracker:
     ) -> PitchHomography:
         """Update homography by computing inter-frame camera motion on the static pitch background
 
-        and dynamically re-anchoring with detected halfway lines or penalty D markings.
+        and smoothly correcting pitch landmark drift.
         """
         gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+        self._frame_count += 1
         if self.prev_gray is None:
             self.prev_gray = gray
             return self.current_homography
@@ -338,7 +359,7 @@ class CameraMotionTracker:
         if player_boxes:
             for box in player_boxes:
                 x1, y1, x2, y2 = [int(v) for v in box[:4]]
-                cv2.rectangle(motion_mask, (max(0, x1), max(0, y1)), (min(w, x2), min(h, y2)), 0, -1)
+                cv2.rectangle(motion_mask, (max(0, x1 - 5), max(0, y1 - 5)), (min(w, x2 + 5), min(h, y2 + 5)), 0, -1)
 
         # Track good features on static pitch markings and turf texture
         pts1 = cv2.goodFeaturesToTrack(
@@ -360,30 +381,63 @@ class CameraMotionTracker:
                     # Estimate affine camera motion: translation (pan/tilt) and scale (zoom)
                     matrix, inliers = cv2.estimateAffinePartial2D(valid1, valid2, method=cv2.RANSAC)
                     if matrix is not None and inliers is not None and np.sum(inliers) >= 6:
-                        # Construct 3x3 inter-frame homography
                         m3x3 = np.eye(3, dtype=np.float64)
                         m3x3[:2, :] = matrix
                         try:
                             m_inv = np.linalg.inv(m3x3)
                             # Update active homography: H_t = H_{t-1} @ M_inv
                             updated_matrix = self.current_homography.matrix @ m_inv
+                            # Normalize projective scale to prevent matrix divergence
+                            if abs(updated_matrix[2, 2]) > 1e-7:
+                                updated_matrix /= updated_matrix[2, 2]
                             self.current_homography = PitchHomography(updated_matrix)
                         except np.linalg.LinAlgError:
                             pass
 
-        # Landmark Re-Anchoring: Check for pitch markings (halfway line or D-line) to eliminate optical flow drift
-        src_quad, dst_quad = PitchMarkingDetector.detect_pitch_geometry(frame)
-        if src_quad is not None and dst_quad is not None:
-            try:
-                landmark_homography = PitchHomography.from_four_points(src_quad, dst_quad)
-                # Exponential blend: 70% motion tracking continuity + 30% landmark anchoring
-                blended_matrix = 0.70 * self.current_homography.matrix + 0.30 * landmark_homography.matrix
-                self.current_homography = PitchHomography(blended_matrix)
-            except Exception:
-                pass
+        # Smooth Pitch Landmark Calibration (Halfway line at X=0.50, Penalty D at X=0.192 or 0.808)
+        # Apply periodic drift calibration without abrupt matrix jumping
+        if self._frame_count % 3 == 0:
+            _grass, white_line_mask, pitch_contour = PitchMarkingDetector.extract_grass_and_lines(frame)
+            half_line, half_conf = PitchMarkingDetector.detect_halfway_line(frame, white_line_mask, pitch_contour)
+            if half_line is not None and half_conf >= 0.40:
+                (pt_top, pt_bot) = half_line
+                mid_u = (pt_top[0] + pt_bot[0]) / 2.0
+                mid_v = (pt_top[1] + pt_bot[1]) / 2.0
+                proj_x, _ = self.current_homography.project_point(mid_u, mid_v)
+                err_x = 0.50 - proj_x
+                if abs(err_x) > 0.005:
+                    shift = float(np.clip(0.18 * err_x, -0.025, 0.025))
+                    trans_mat = np.array([
+                        [1.0, 0.0, shift],
+                        [0.0, 1.0, 0.0],
+                        [0.0, 0.0, 1.0],
+                    ], dtype=np.float64)
+                    new_mat = trans_mat @ self.current_homography.matrix
+                    if abs(new_mat[2, 2]) > 1e-7:
+                        new_mat /= new_mat[2, 2]
+                    self.current_homography = PitchHomography(new_mat)
+            else:
+                d_line, d_conf = PitchMarkingDetector.detect_d_line(frame, white_line_mask, pitch_contour)
+                if d_line is not None and d_conf >= 0.40:
+                    apex_u, apex_v = d_line["apex"]
+                    proj_x, _ = self.current_homography.project_point(apex_u, apex_v)
+                    target_x = 0.192 if d_line["side"] == "left" else 0.808
+                    err_x = target_x - proj_x
+                    if abs(err_x) > 0.005:
+                        shift = float(np.clip(0.18 * err_x, -0.025, 0.025))
+                        trans_mat = np.array([
+                            [1.0, 0.0, shift],
+                            [0.0, 1.0, 0.0],
+                            [0.0, 0.0, 1.0],
+                        ], dtype=np.float64)
+                        new_mat = trans_mat @ self.current_homography.matrix
+                        if abs(new_mat[2, 2]) > 1e-7:
+                            new_mat /= new_mat[2, 2]
+                        self.current_homography = PitchHomography(new_mat)
 
         self.prev_gray = gray
         return self.current_homography
+
 
 
 
@@ -493,6 +547,14 @@ class PitchHomography:
             except Exception:
                 pass
         return cls.from_preset("main_broadcast", w, h)
+
+    def project_raw(self, u: float, v: float) -> Tuple[float, float]:
+        """Project pixel coordinate into pitch space without artificial clamping."""
+        pt = np.array([u, v, 1.0], dtype=np.float64)
+        proj = self.matrix @ pt
+        if abs(proj[2]) < 1e-7:
+            return (0.0, 0.0)
+        return float(proj[0] / proj[2]), float(proj[1] / proj[2])
 
     def project_point(self, u: float, v: float) -> Tuple[float, float]:
         """Project a single pixel coordinate (u, v) into normalized pitch space (x, y)."""

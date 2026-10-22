@@ -16,6 +16,7 @@ class JerseyClassifier:
         self._team_lab_centers: Dict[str, np.ndarray] = {}
         self._fitted = False
         self._player_team_cache: Dict[str, str] = {}
+        self._referee_ids: set[str] = set()
 
     def extract_torso_color(self, frame: np.ndarray, bbox: Sequence[float]) -> np.ndarray | None:
         """Extract the dominant non-grass, non-skin jersey RGB color from a player's upper torso region.
@@ -81,12 +82,10 @@ class JerseyClassifier:
 
         # Extract dominant color mode (distinguish primary kit from sponsor accents/stripes)
         if len(rgb_pixels) >= 16:
-            # Fast 2-means clustering to isolate primary kit fabric from trim/collar/numbers
             criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 10, 1.0)
             _, labels, centers = cv2.kmeans(
                 rgb_pixels, 2, None, criteria, 3, cv2.KMEANS_PP_CENTERS
             )
-            # Pick center with larger pixel count
             c0_count = np.sum(labels == 0)
             c1_count = len(labels) - c0_count
             dominant_rgb = centers[0] if c0_count >= c1_count else centers[1]
@@ -98,7 +97,6 @@ class JerseyClassifier:
     def _rgb_to_lab(rgb: np.ndarray) -> np.ndarray:
         """Convert an RGB color vector [0..255] to CIE-Lab."""
         clipped = np.clip(rgb, 0, 255).astype(np.uint8).reshape(1, 1, 3)
-        # cv2.cvtColor expects BGR or RGB depending on flag
         lab = cv2.cvtColor(clipped, cv2.COLOR_RGB2Lab)
         return lab[0, 0].astype(np.float32)
 
@@ -108,6 +106,8 @@ class JerseyClassifier:
         Aggregates samples per player track and operates in CIE-Lab color space with
         outlier rejection for referees and goalkeepers.
         """
+        self._referee_ids.clear()
+        self._player_team_cache.clear()
         if len(player_color_samples) < 2:
             self.team_colors[self.team_names[0]] = np.array([200.0, 50.0, 50.0])  # Red
             self.team_colors[self.team_names[1]] = np.array([50.0, 50.0, 200.0])  # Blue
@@ -127,10 +127,8 @@ class JerseyClassifier:
 
         unique_players = list(player_samples_map.keys())
         if len(unique_players) < 2:
-            # Single player detected in clip: assign to home team, set contrasting away color
             single_rgb = np.median(player_samples_map[unique_players[0]], axis=0)
             self.team_colors[self.team_names[0]] = single_rgb
-            # Contrasting color: invert or hue shift
             contrasting = np.array([255 - single_rgb[0], 255 - single_rgb[1], 255 - single_rgb[2]])
             self.team_colors[self.team_names[1]] = contrasting
             self._team_lab_centers[self.team_names[0]] = self._rgb_to_lab(single_rgb)
@@ -153,8 +151,8 @@ class JerseyClassifier:
 
         criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.5)
 
-        # If we have enough players (>=6), cluster into 3 to isolate referee/goalkeeper outliers
-        k_clusters = 3 if len(unique_players) >= 6 else 2
+        # Cluster into 3 if we have >= 5 players to isolate referee/goalkeeper outliers
+        k_clusters = 3 if len(unique_players) >= 5 else 2
         k_clusters = min(k_clusters, len(unique_players))
         _, labels, centers = cv2.kmeans(
             player_labs, k_clusters, None, criteria, 10, cv2.KMEANS_PP_CENTERS
@@ -181,27 +179,88 @@ class JerseyClassifier:
         self._team_lab_centers[self.team_names[1]] = self._rgb_to_lab(c1_rgb)
         self._fitted = True
 
-        # Assign each player to nearest team center in Lab space
-        for p_id, p_lab in zip(unique_players, player_labs):
+        # Identify referee outliers and assign outfield players
+        for p_id, p_lab, p_rgb, p_label in zip(unique_players, player_labs, player_rgbs, labels):
             dist_0 = float(np.linalg.norm(p_lab - self._team_lab_centers[self.team_names[0]]))
             dist_1 = float(np.linalg.norm(p_lab - self._team_lab_centers[self.team_names[1]]))
-            self._player_team_cache[p_id] = self.team_names[0] if dist_0 <= dist_1 else self.team_names[1]
+            min_dist = min(dist_0, dist_1)
+
+            # Check if this player is a referee:
+            # 1. Falls in an outlier 3rd cluster (not c0 or c1)
+            # 2. Or color distance to both teams is high (ΔE >= 18.0)
+            # 3. Or distinctive referee uniform colors (neon yellow, pink, turquoise, all black)
+            is_ref = False
+            if k_clusters >= 3 and p_label not in (c0_idx, c1_idx):
+                is_ref = True
+            elif min_dist >= 18.0:
+                is_ref = True
+            elif (p_rgb[0] > 135 and p_rgb[1] > 155 and p_rgb[2] < 95 and (p_rgb[1] - p_rgb[2]) > 55):
+                # Fluorescent neon yellow / lime referee kit
+                is_ref = True
+            elif (p_rgb[0] > 150 and p_rgb[1] < 100 and p_rgb[2] > 95):
+                # Fluorescent pink / magenta referee kit
+                is_ref = True
+            elif (p_rgb[0] < 75 and p_rgb[1] > 140 and p_rgb[2] > 150):
+                # Bright cyan / turquoise referee kit
+                is_ref = True
+            elif (p_rgb[0] < 65 and p_rgb[1] < 65 and p_rgb[2] < 65 and min_dist >= 14.0):
+                # Traditional all-black referee kit
+                is_ref = True
+
+            if is_ref:
+                self._referee_ids.add(p_id)
+                self._player_team_cache[p_id] = "referee"
+            else:
+                team = self.team_names[0] if dist_0 <= dist_1 else self.team_names[1]
+                self._player_team_cache[p_id] = team
+
+    def is_referee(self, player_id: str, color: Optional[np.ndarray] = None) -> bool:
+        """Check whether a detected entity is a referee rather than an outfield player."""
+        if str(player_id) in self._referee_ids:
+            return True
+        if self._player_team_cache.get(str(player_id)) == "referee":
+            return True
+        if self._fitted and color is not None:
+            color_lab = self._rgb_to_lab(color)
+            dist_0 = float(np.linalg.norm(color_lab - self._team_lab_centers[self.team_names[0]]))
+            dist_1 = float(np.linalg.norm(color_lab - self._team_lab_centers[self.team_names[1]]))
+            min_dist = min(dist_0, dist_1)
+            if min_dist >= 18.0:
+                return True
+            # Check distinctive referee kit colors
+            if color[0] > 135 and color[1] > 155 and color[2] < 95 and (color[1] - color[2]) > 55:
+                return True
+            if color[0] > 150 and color[1] < 100 and color[2] > 95:
+                return True
+            if color[0] < 75 and color[1] > 140 and color[2] > 150:
+                return True
+            if color[0] < 65 and color[1] < 65 and color[2] < 65 and min_dist >= 14.0:
+                return True
+        return False
 
     def predict_team(self, player_id: str, color: np.ndarray | None) -> str:
-        """Predict whether a player belongs to 'home' or 'away'."""
-        if player_id in self._player_team_cache:
-            return self._player_team_cache[player_id]
+        """Predict whether a player belongs to 'home', 'away', or 'referee'."""
+        pid_str = str(player_id)
+        if pid_str in self._player_team_cache:
+            return self._player_team_cache[pid_str]
 
         if not self._fitted or color is None:
-            team = self.team_names[hash(player_id) % 2]
-            self._player_team_cache[player_id] = team
+            team = self.team_names[hash(pid_str) % 2]
+            self._player_team_cache[pid_str] = team
             return team
 
         color_lab = self._rgb_to_lab(color)
         dist_0 = float(np.linalg.norm(color_lab - self._team_lab_centers[self.team_names[0]]))
         dist_1 = float(np.linalg.norm(color_lab - self._team_lab_centers[self.team_names[1]]))
+        min_dist = min(dist_0, dist_1)
+
+        if min_dist >= 18.0 or self.is_referee(pid_str, color):
+            self._referee_ids.add(pid_str)
+            self._player_team_cache[pid_str] = "referee"
+            return "referee"
+
         team = self.team_names[0] if dist_0 <= dist_1 else self.team_names[1]
-        self._player_team_cache[player_id] = team
+        self._player_team_cache[pid_str] = team
         return team
 
     def get_team_hex_colors(self) -> Dict[str, str]:
