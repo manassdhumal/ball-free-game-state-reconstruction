@@ -29,9 +29,16 @@ import {
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { Pitch, PitchLegend } from "@/components/Pitch";
-import { useLivePlayers, useBackendHealth } from "@/hooks/useGameState";
+import {
+  useLivePlayers,
+  useBackendHealth,
+  useLivePossession,
+  useLiveTactical,
+} from "@/hooks/useGameState";
 import { getGsrStatus } from "@/api/gsr";
+import { getEvaluationSummary } from "@/api/evaluation";
 import { useSession } from "@/lib/session";
+import { displayTeamId } from "@/lib/data";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -55,11 +62,20 @@ export const Route = createFileRoute("/")({
 
 export function ProductLandingPage() {
   const navigate = useNavigate();
-  const { matchId, frame } = useSession();
+  const { matchId, frame, teamNames } = useSession();
   const health = useBackendHealth();
   const gsrQuery = useQuery({ queryKey: ["gsr-status"], queryFn: getGsrStatus, staleTime: 30_000 });
+  const evaluation = useQuery({
+    queryKey: ["evaluation-summary"],
+    queryFn: getEvaluationSummary,
+  });
   const liveState = useLivePlayers(matchId, frame);
+  const livePossession = useLivePossession(matchId, frame);
+  const liveTactical = useLiveTactical(matchId, frame);
   const players = liveState.data ?? [];
+  const possessorId = livePossession.data?.possessor_id;
+  const tas = liveTactical.data?.["tas"];
+  const evaluationConditions = evaluation.data?.data?.summary_by_condition;
 
   const [activeTab, setActiveTab] = useState<"radar" | "pipeline" | "benchmarks">("radar");
 
@@ -91,7 +107,10 @@ export function ProductLandingPage() {
             <a href="#journey" className="hover:text-foreground transition-colors">
               How It Works
             </a>
-            <Link to="/broadcast" className="hover:text-emerald-400 transition-colors flex items-center gap-1">
+            <Link
+              to="/broadcast"
+              className="hover:text-emerald-400 transition-colors flex items-center gap-1"
+            >
               <span>Video Studio</span>
               <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />
             </Link>
@@ -109,7 +128,11 @@ export function ProductLandingPage() {
               <span className="flex items-center gap-1.5 text-muted-foreground">
                 <span
                   className={`h-2 w-2 rounded-full ${
-                    health.isSuccess ? "bg-emerald-400" : health.isLoading ? "bg-amber-400" : "bg-rose-400"
+                    health.isSuccess
+                      ? "bg-emerald-400"
+                      : health.isLoading
+                        ? "bg-amber-400"
+                        : "bg-rose-400"
                   }`}
                 />
                 Backend {health.isSuccess ? "Connected" : "Offline"}
@@ -154,9 +177,9 @@ export function ProductLandingPage() {
 
           {/* Subheading */}
           <p className="mt-5 max-w-2xl mx-auto text-sm sm:text-base text-muted-foreground leading-relaxed">
-            Eliminate fragile ball tracking and expensive multi-camera sensor rigs. Our computer vision and spatial graph
-            architecture extracts player positioning, team compactness, possession transitions, and tactical momentum
-            solely from video silhouettes.
+            Eliminate fragile ball tracking and expensive multi-camera sensor rigs. Our computer
+            vision and spatial graph architecture extracts player positioning, team compactness,
+            possession transitions, and tactical momentum solely from video silhouettes.
           </p>
 
           {/* CTAs */}
@@ -190,19 +213,27 @@ export function ProductLandingPage() {
           <div className="mt-12 grid grid-cols-2 sm:grid-cols-4 gap-3 max-w-3xl mx-auto text-left">
             <div className="border border-border/60 bg-panel/70 p-3 rounded-lg backdrop-blur-sm">
               <div className="text-[11px] text-muted-foreground">Detection Engine</div>
-              <div className="text-sm font-bold font-mono text-emerald-400 mt-0.5">YOLOv8 + ByteTrack</div>
+              <div className="text-sm font-bold font-mono text-emerald-400 mt-0.5">
+                YOLOv8 + ByteTrack
+              </div>
             </div>
             <div className="border border-border/60 bg-panel/70 p-3 rounded-lg backdrop-blur-sm">
               <div className="text-[11px] text-muted-foreground">Perspective Transform</div>
-              <div className="text-sm font-bold font-mono text-foreground mt-0.5">4-Point Homography</div>
+              <div className="text-sm font-bold font-mono text-foreground mt-0.5">
+                4-Point Homography
+              </div>
             </div>
             <div className="border border-border/60 bg-panel/70 p-3 rounded-lg backdrop-blur-sm">
               <div className="text-[11px] text-muted-foreground">Ball Dependency</div>
-              <div className="text-sm font-bold font-mono text-cyan-400 mt-0.5">Zero (100% Ball-Free)</div>
+              <div className="text-sm font-bold font-mono text-cyan-400 mt-0.5">
+                Zero (100% Ball-Free)
+              </div>
             </div>
             <div className="border border-border/60 bg-panel/70 p-3 rounded-lg backdrop-blur-sm">
               <div className="text-[11px] text-muted-foreground">Empirical Evaluation</div>
-              <div className="text-sm font-bold font-mono text-foreground mt-0.5">180 Benchmark Runs</div>
+              <div className="text-sm font-bold font-mono text-foreground mt-0.5">
+                180 Benchmark Runs
+              </div>
             </div>
           </div>
         </div>
@@ -215,12 +246,15 @@ export function ProductLandingPage() {
         <div className="mx-auto max-w-7xl px-4 sm:px-6 lg:px-8">
           <div className="flex flex-col sm:flex-row sm:items-end justify-between gap-4 mb-6">
             <div>
-              <div className="label-xs text-emerald-400 font-semibold">Live Operational Interface</div>
+              <div className="label-xs text-emerald-400 font-semibold">
+                Live Operational Interface
+              </div>
               <h2 className="text-xl sm:text-2xl font-bold tracking-tight text-foreground mt-1">
                 From Broadcast Camera to High-Definition 2D Tactical Radar
               </h2>
               <p className="text-xs sm:text-sm text-muted-foreground mt-0.5">
-                Inspect player spatial coordinates, velocity vectors, and inferred possession in real time.
+                Inspect player spatial coordinates, velocity vectors, and inferred possession in
+                real time.
               </p>
             </div>
 
@@ -252,8 +286,8 @@ export function ProductLandingPage() {
                     <Radio className="h-3.5 w-3.5 text-emerald-400 animate-pulse" />
                     Input Broadcast Stream
                   </span>
-                  <span className="font-mono text-[11px] text-emerald-400 bg-emerald-500/10 px-1.5 py-0.5 rounded">
-                    1280x720 • 25 FPS
+                  <span className="font-mono text-[11px] text-muted-foreground bg-muted/40 px-1.5 py-0.5 rounded">
+                    Preview only
                   </span>
                 </div>
                 <div className="mt-3 relative aspect-video bg-black rounded-lg border border-border/80 overflow-hidden flex items-center justify-center">
@@ -261,29 +295,28 @@ export function ProductLandingPage() {
                   <div className="absolute inset-0 bg-gradient-to-t from-black/80 via-transparent to-black/30" />
                   <div className="absolute inset-0 flex flex-col justify-between p-3 pointer-events-none">
                     <div className="flex justify-between items-center text-[10px] font-mono text-white/80">
-                      <span className="bg-black/60 px-1.5 py-0.5 rounded">CAM 01 · ELEVATED SIDELINE</span>
-                      <span className="bg-emerald-600 px-1.5 py-0.5 rounded font-bold">YOLOv8 TRACKING</span>
+                      <span className="bg-black/60 px-1.5 py-0.5 rounded">
+                        VIDEO ANALYSIS PREVIEW
+                      </span>
+                      <span className="bg-muted/60 px-1.5 py-0.5 rounded font-bold">
+                        NOT LIVE DATA
+                      </span>
                     </div>
 
-                    {/* Simulated Detection Boxes Overlay */}
                     <div className="relative w-full h-full flex items-center justify-center">
-                      <div className="absolute top-[28%] left-[34%] border border-blue-400 bg-blue-500/20 px-1 py-0.5 rounded text-[8px] font-mono text-blue-200">
-                        #10 HOME (0.89)
-                      </div>
-                      <div className="absolute top-[42%] left-[48%] border border-red-400 bg-red-500/20 px-1 py-0.5 rounded text-[8px] font-mono text-red-200">
-                        #19 AWAY (0.94)
-                      </div>
-                      <div className="absolute top-[35%] left-[62%] border border-blue-400 bg-blue-500/20 px-1 py-0.5 rounded text-[8px] font-mono text-blue-200">
-                        #7 HOME (0.91)
-                      </div>
-                      <div className="absolute top-[55%] left-[25%] border border-red-400 bg-red-500/20 px-1 py-0.5 rounded text-[8px] font-mono text-red-200">
-                        #22 AWAY (0.87)
+                      <div className="rounded border border-white/20 bg-black/50 px-3 py-2 text-center text-xs text-white/80">
+                        Illustrative layout only
+                        <div className="mt-1 text-[10px] text-white/60">
+                          Upload a clip in Video Studio to view measured detections.
+                        </div>
                       </div>
                     </div>
 
                     <div className="flex justify-between items-end text-[10px] font-mono text-white/80">
-                      <span className="bg-black/60 px-1.5 py-0.5 rounded">HOMOGRAPHY: MAIN_BROADCAST</span>
-                      <span className="text-emerald-400 font-bold">22 OBJECTS DETECTED</span>
+                      <span className="bg-black/60 px-1.5 py-0.5 rounded">
+                        Pitch calibration requires video analysis
+                      </span>
+                      <span className="text-white/70 font-bold">NO DETECTIONS SHOWN</span>
                     </div>
                   </div>
                 </div>
@@ -292,14 +325,26 @@ export function ProductLandingPage() {
               {/* Ingestion Specs */}
               <div className="grid grid-cols-2 gap-2 text-xs">
                 <div className="border border-border/60 bg-panel-alt/80 p-2.5 rounded">
-                  <div className="text-[10.5px] text-muted-foreground font-mono">JERSEY CLASSIFIER</div>
-                  <div className="font-semibold text-foreground text-xs mt-0.5">K-Means Lab Color Model</div>
-                  <div className="text-[10px] text-muted-foreground mt-0.5">Auto-separates kits</div>
+                  <div className="text-[10.5px] text-muted-foreground font-mono">
+                    JERSEY CLASSIFIER
+                  </div>
+                  <div className="font-semibold text-foreground text-xs mt-0.5">
+                    K-Means Lab Color Model
+                  </div>
+                  <div className="text-[10px] text-muted-foreground mt-0.5">
+                    Auto-separates kits
+                  </div>
                 </div>
                 <div className="border border-border/60 bg-panel-alt/80 p-2.5 rounded">
-                  <div className="text-[10.5px] text-muted-foreground font-mono">SIGNAL MITIGATION</div>
-                  <div className="font-semibold text-emerald-400 text-xs mt-0.5">Savitzky-Golay Filter</div>
-                  <div className="text-[10px] text-muted-foreground mt-0.5">+0.178 F1 recovery gain</div>
+                  <div className="text-[10.5px] text-muted-foreground font-mono">
+                    SIGNAL MITIGATION
+                  </div>
+                  <div className="font-semibold text-emerald-400 text-xs mt-0.5">
+                    Track smoothing
+                  </div>
+                  <div className="text-[10px] text-muted-foreground mt-0.5">
+                    Results depend on source video and settings
+                  </div>
                 </div>
               </div>
             </div>
@@ -313,7 +358,9 @@ export function ProductLandingPage() {
                     Reconstructed 2D Pitch Radar
                   </span>
                   <div className="flex items-center gap-2">
-                    <span className="font-mono text-[11px] text-muted-foreground">Frame {frame}</span>
+                    <span className="font-mono text-[11px] text-muted-foreground">
+                      Frame {frame}
+                    </span>
                     <span className="text-[10px] uppercase font-bold text-emerald-400 border border-emerald-500/40 bg-emerald-500/10 px-1.5 py-0.5 rounded">
                       Live State
                     </span>
@@ -335,7 +382,7 @@ export function ProductLandingPage() {
                   )}
                 </div>
                 <div className="mt-2">
-                  <PitchLegend />
+                  <PitchLegend players={players} />
                 </div>
               </div>
 
@@ -343,12 +390,22 @@ export function ProductLandingPage() {
               <div className="border border-emerald-500/30 bg-emerald-500/10 p-2.5 rounded-lg flex items-center justify-between text-xs">
                 <div className="flex items-center gap-3">
                   <div>
-                    <span className="text-[10px] text-muted-foreground uppercase font-mono">Inferred Possessor</span>
-                    <div className="font-bold text-emerald-400 text-xs">HOME_10 (Confidence 0.88)</div>
+                    <span className="text-[10px] text-muted-foreground uppercase font-mono">
+                      Inferred Possessor
+                    </span>
+                    <div className="font-bold text-emerald-400 text-xs">
+                      {typeof possessorId === "string"
+                        ? displayTeamId(possessorId, players, teamNames)
+                        : "Data not available"}
+                    </div>
                   </div>
                   <div className="border-l border-border/80 pl-3">
-                    <span className="text-[10px] text-muted-foreground uppercase font-mono">Tactical Advantage (TAS)</span>
-                    <div className="font-bold text-foreground text-xs">+0.684 (Attacking Third)</div>
+                    <span className="text-[10px] text-muted-foreground uppercase font-mono">
+                      Tactical Advantage (TAS)
+                    </span>
+                    <div className="font-bold text-foreground text-xs">
+                      {typeof tas === "number" ? tas.toFixed(3) : "Data not available"}
+                    </div>
                   </div>
                 </div>
 
@@ -376,7 +433,8 @@ export function ProductLandingPage() {
               How Raw Video Becomes Tactical Intelligence
             </h2>
             <p className="text-xs sm:text-sm text-muted-foreground mt-2">
-              Four tightly integrated stages convert broadcast video frames into canonical 2D pitch coordinates and spatial decision models.
+              Four tightly integrated stages convert broadcast video frames into canonical 2D pitch
+              coordinates and spatial decision models.
             </p>
           </div>
 
@@ -389,7 +447,8 @@ export function ProductLandingPage() {
               </div>
               <h3 className="text-sm font-bold text-foreground">Video Ingest & Detection</h3>
               <p className="text-xs text-muted-foreground mt-1.5 leading-relaxed">
-                Processes video clips at 25 FPS using YOLOv8n to identify humanoid player silhouettes, referees, and field boundaries.
+                Processes video clips at 25 FPS using YOLOv8n to identify humanoid player
+                silhouettes, referees, and field boundaries.
               </p>
               <div className="mt-3 text-[10px] font-mono text-muted-foreground bg-panel-alt px-2 py-1 rounded border border-border">
                 YOLOv8n · Ultralytics
@@ -404,7 +463,8 @@ export function ProductLandingPage() {
               </div>
               <h3 className="text-sm font-bold text-foreground">ByteTrack & Kit Clustering</h3>
               <p className="text-xs text-muted-foreground mt-1.5 leading-relaxed">
-                ByteTrack maintains track continuity across occlusions while K-Means clustering on torso pixels categorizes Home vs Away squads.
+                ByteTrack maintains track continuity across occlusions while jersey-color clustering
+                assigns players to one of the two detected kit groups.
               </p>
               <div className="mt-3 text-[10px] font-mono text-muted-foreground bg-panel-alt px-2 py-1 rounded border border-border">
                 ByteTrack · CIELAB K-Means
@@ -419,7 +479,8 @@ export function ProductLandingPage() {
               </div>
               <h3 className="text-sm font-bold text-foreground">4-Point Pitch Homography</h3>
               <p className="text-xs text-muted-foreground mt-1.5 leading-relaxed">
-                Perspective transformation maps camera pixels to canonical 105m × 68m coordinates, with interactive corner-flag calibration.
+                Perspective transformation maps camera pixels to canonical 105m × 68m coordinates,
+                with interactive corner-flag calibration.
               </p>
               <div className="mt-3 text-[10px] font-mono text-muted-foreground bg-panel-alt px-2 py-1 rounded border border-border">
                 OpenCV Homography · Presets
@@ -434,7 +495,8 @@ export function ProductLandingPage() {
               </div>
               <h3 className="text-sm font-bold text-foreground">Spatial AI & Tactical Score</h3>
               <p className="text-xs text-muted-foreground mt-1.5 leading-relaxed">
-                Voronoi spatial graphs calculate defensive pressure, team compactness, ball-free possession, and Tactical Advantage Scores.
+                Voronoi spatial graphs calculate defensive pressure, team compactness, ball-free
+                possession, and Tactical Advantage Scores.
               </p>
               <div className="mt-3 text-[10px] font-mono text-muted-foreground bg-panel-alt px-2 py-1 rounded border border-border">
                 Delaunay Graph · TAS Engine
@@ -455,7 +517,8 @@ export function ProductLandingPage() {
               Engineered for Match Analysts & AI Vision Teams
             </h2>
             <p className="text-xs sm:text-sm text-muted-foreground mt-2">
-              Explore the four primary output studios designed for video ingestion, radar scrubbing, and tactical simulation.
+              Explore the four primary output studios designed for video ingestion, radar scrubbing,
+              and tactical simulation.
             </p>
           </div>
 
@@ -475,17 +538,28 @@ export function ProductLandingPage() {
                   </span>
                 </div>
                 <p className="text-xs text-muted-foreground mt-3 leading-relaxed">
-                  Drag and drop actual match gameplay video files (`.mp4`, `.mov`, `.avi`). Calibrate camera perspectives with 4 interactive corner points, run the YOLOv8 + ByteTrack pipeline, and inspect synchronized dual-view video playback alongside live 2D radar.
+                  Drag and drop actual match gameplay video files (`.mp4`, `.mov`, `.avi`).
+                  Calibrate camera perspectives with 4 interactive corner points, run the YOLOv8 +
+                  ByteTrack pipeline, and inspect synchronized dual-view video playback alongside
+                  live 2D radar.
                 </p>
                 <div className="mt-4 flex flex-wrap gap-2 text-[10.5px] font-mono text-muted-foreground">
-                  <span className="bg-panel-alt px-2 py-1 rounded border border-border">Dual-View Playback</span>
-                  <span className="bg-panel-alt px-2 py-1 rounded border border-border">4-Point Calibration</span>
-                  <span className="bg-panel-alt px-2 py-1 rounded border border-border">CLI Video Exporter</span>
+                  <span className="bg-panel-alt px-2 py-1 rounded border border-border">
+                    Dual-View Playback
+                  </span>
+                  <span className="bg-panel-alt px-2 py-1 rounded border border-border">
+                    4-Point Calibration
+                  </span>
+                  <span className="bg-panel-alt px-2 py-1 rounded border border-border">
+                    CLI Video Exporter
+                  </span>
                 </div>
               </div>
 
               <div className="mt-6 pt-3 border-t border-border flex items-center justify-between">
-                <span className="text-[11px] text-muted-foreground">Ready to test with bundled demo clip</span>
+                <span className="text-[11px] text-muted-foreground">
+                  Ready to test with bundled demo clip
+                </span>
                 <Link
                   to="/broadcast"
                   className="flex items-center gap-1.5 text-xs font-semibold text-emerald-400 hover:text-emerald-300"
@@ -504,24 +578,36 @@ export function ProductLandingPage() {
                     <div className="h-8 w-8 rounded bg-blue-500/15 border border-blue-500/30 flex items-center justify-center text-blue-400">
                       <Film className="h-4 w-4" />
                     </div>
-                    <h3 className="text-base font-bold text-foreground">Interactive Match Explorer</h3>
+                    <h3 className="text-base font-bold text-foreground">
+                      Interactive Match Explorer
+                    </h3>
                   </div>
                   <span className="text-[10px] font-mono bg-blue-500/20 text-blue-400 font-bold px-2 py-0.5 rounded border border-blue-500/40">
                     FRAME SCRUBBER
                   </span>
                 </div>
                 <p className="text-xs text-muted-foreground mt-3 leading-relaxed">
-                  Scrub continuous tracking frames at 0.25x to 2.0x playback speeds. Select any player token to inspect instantaneous speed, orientation, distance to nearest defenders, and local Voronoi density.
+                  Scrub continuous tracking frames at 0.25x to 2.0x playback speeds. Select any
+                  player token to inspect instantaneous speed, orientation, distance to nearest
+                  defenders, and local Voronoi density.
                 </p>
                 <div className="mt-4 flex flex-wrap gap-2 text-[10.5px] font-mono text-muted-foreground">
-                  <span className="bg-panel-alt px-2 py-1 rounded border border-border">Dynamic Velocity Vectors</span>
-                  <span className="bg-panel-alt px-2 py-1 rounded border border-border">Player Inspector</span>
-                  <span className="bg-panel-alt px-2 py-1 rounded border border-border">Variable Speed</span>
+                  <span className="bg-panel-alt px-2 py-1 rounded border border-border">
+                    Dynamic Velocity Vectors
+                  </span>
+                  <span className="bg-panel-alt px-2 py-1 rounded border border-border">
+                    Player Inspector
+                  </span>
+                  <span className="bg-panel-alt px-2 py-1 rounded border border-border">
+                    Variable Speed
+                  </span>
                 </div>
               </div>
 
               <div className="mt-6 pt-3 border-t border-border flex items-center justify-between">
-                <span className="text-[11px] text-muted-foreground">Compatible with Metrica & Uploaded Video</span>
+                <span className="text-[11px] text-muted-foreground">
+                  Compatible with Metrica & Uploaded Video
+                </span>
                 <Link
                   to="/match-explorer"
                   className="flex items-center gap-1.5 text-xs font-semibold text-blue-400 hover:text-blue-300"
@@ -540,24 +626,36 @@ export function ProductLandingPage() {
                     <div className="h-8 w-8 rounded bg-teal-500/15 border border-teal-500/30 flex items-center justify-center text-teal-400">
                       <BarChart3 className="h-4 w-4" />
                     </div>
-                    <h3 className="text-base font-bold text-foreground">Tactical Advantage Engine (TAS)</h3>
+                    <h3 className="text-base font-bold text-foreground">
+                      Tactical Advantage Engine (TAS)
+                    </h3>
                   </div>
                   <span className="text-[10px] font-mono bg-teal-500/20 text-teal-400 font-bold px-2 py-0.5 rounded border border-teal-500/40">
                     TERRITORIAL AI
                   </span>
                 </div>
                 <p className="text-xs text-muted-foreground mt-3 leading-relaxed">
-                  Quantifies attacking momentum, forward passing corridors, and defensive compactness in real time. Generates continuous advantage signals without requiring annotated pass tags or ball detection.
+                  Quantifies attacking momentum, forward passing corridors, and defensive
+                  compactness in real time. Generates continuous advantage signals without requiring
+                  annotated pass tags or ball detection.
                 </p>
                 <div className="mt-4 flex flex-wrap gap-2 text-[10.5px] font-mono text-muted-foreground">
-                  <span className="bg-panel-alt px-2 py-1 rounded border border-border">Attacking Third Progress</span>
-                  <span className="bg-panel-alt px-2 py-1 rounded border border-border">Defensive Compactness</span>
-                  <span className="bg-panel-alt px-2 py-1 rounded border border-border">Continuous TAS Curve</span>
+                  <span className="bg-panel-alt px-2 py-1 rounded border border-border">
+                    Attacking Third Progress
+                  </span>
+                  <span className="bg-panel-alt px-2 py-1 rounded border border-border">
+                    Defensive Compactness
+                  </span>
+                  <span className="bg-panel-alt px-2 py-1 rounded border border-border">
+                    Continuous TAS Curve
+                  </span>
                 </div>
               </div>
 
               <div className="mt-6 pt-3 border-t border-border flex items-center justify-between">
-                <span className="text-[11px] text-muted-foreground">Interpretable tactical scoring model</span>
+                <span className="text-[11px] text-muted-foreground">
+                  Interpretable tactical scoring model
+                </span>
                 <Link
                   to="/tactical"
                   className="flex items-center gap-1.5 text-xs font-semibold text-teal-400 hover:text-teal-300"
@@ -576,24 +674,36 @@ export function ProductLandingPage() {
                     <div className="h-8 w-8 rounded bg-purple-500/15 border border-purple-500/30 flex items-center justify-center text-purple-400">
                       <GitBranch className="h-4 w-4" />
                     </div>
-                    <h3 className="text-base font-bold text-foreground">Counterfactual Decision Analysis</h3>
+                    <h3 className="text-base font-bold text-foreground">
+                      Counterfactual Decision Analysis
+                    </h3>
                   </div>
                   <span className="text-[10px] font-mono bg-purple-500/20 text-purple-400 font-bold px-2 py-0.5 rounded border border-purple-500/40">
                     PASS RANKING
                   </span>
                 </div>
                 <p className="text-xs text-muted-foreground mt-3 leading-relaxed">
-                  Evaluates alternative passing options available to the ball possessor at any frozen instant. Ranks teammate options by passing lane openness, receiver support, and territorial progression gain.
+                  Evaluates alternative passing options available to the ball possessor at any
+                  frozen instant. Ranks teammate options by passing lane openness, receiver support,
+                  and territorial progression gain.
                 </p>
                 <div className="mt-4 flex flex-wrap gap-2 text-[10.5px] font-mono text-muted-foreground">
-                  <span className="bg-panel-alt px-2 py-1 rounded border border-border">Top-3 Ranked Options</span>
-                  <span className="bg-panel-alt px-2 py-1 rounded border border-border">Defensive Lane Pressure</span>
-                  <span className="bg-panel-alt px-2 py-1 rounded border border-border">Hypothetical Simulation</span>
+                  <span className="bg-panel-alt px-2 py-1 rounded border border-border">
+                    Top-3 Ranked Options
+                  </span>
+                  <span className="bg-panel-alt px-2 py-1 rounded border border-border">
+                    Defensive Lane Pressure
+                  </span>
+                  <span className="bg-panel-alt px-2 py-1 rounded border border-border">
+                    Hypothetical Simulation
+                  </span>
                 </div>
               </div>
 
               <div className="mt-6 pt-3 border-t border-border flex items-center justify-between">
-                <span className="text-[11px] text-muted-foreground">What-if tactical decision modeling</span>
+                <span className="text-[11px] text-muted-foreground">
+                  What-if tactical decision modeling
+                </span>
                 <Link
                   to="/counterfactual"
                   className="flex items-center gap-1.5 text-xs font-semibold text-purple-400 hover:text-purple-300"
@@ -618,7 +728,8 @@ export function ProductLandingPage() {
               Explore All Dedicated Analysis Views
             </h2>
             <p className="text-xs sm:text-sm text-muted-foreground mt-2">
-              Every tactical calculation, degradation stress test, and filtering benchmark is isolated in its own dedicated workstation page for in-depth inspection.
+              Every tactical calculation, degradation stress test, and filtering benchmark is
+              isolated in its own dedicated workstation page for in-depth inspection.
             </p>
           </div>
 
@@ -719,7 +830,8 @@ export function ProductLandingPage() {
                   Noise & Degradation Lab
                 </h4>
                 <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
-                  Inject synthetic dropouts, ID swaps, and coordinate jitter to stress-test resilience.
+                  Inject synthetic dropouts, ID swaps, and coordinate jitter to stress-test
+                  resilience.
                 </p>
               </div>
               <div className="mt-3 pt-2 border-t border-border/60 text-[10.5px] font-mono text-amber-400/80">
@@ -745,7 +857,7 @@ export function ProductLandingPage() {
                   Recovery & Filtering
                 </h4>
                 <p className="text-xs text-muted-foreground mt-1 leading-relaxed">
-                  Savitzky-Golay polynomial smoothing and linear interpolation benchmarks (+0.178 F1).
+                  Apply track smoothing and gap filling when enabled for video analysis.
                 </p>
               </div>
               <div className="mt-3 pt-2 border-t border-border/60 text-[10.5px] font-mono text-emerald-400/80">
@@ -843,10 +955,12 @@ export function ProductLandingPage() {
             <div>
               <div className="label-xs text-emerald-400 font-semibold">Empirical Foundation</div>
               <h2 className="text-2xl sm:text-3xl font-bold tracking-tight text-foreground mt-1">
-                Backed by 60 Controlled Research Experiments
+                Verified Evaluation Results
               </h2>
               <p className="text-xs sm:text-sm text-muted-foreground mt-1 max-w-xl">
-                The product's robustness is certified across 180 condition observations under synthetic noise degradation, Savitzky-Golay filtering, and live broadcast perception.
+                {evaluation.data?.data
+                  ? `${evaluation.data.data.n_runs} paired benchmark runs across ${evaluation.data.data.n_conditions} condition measurements. These offline results do not represent accuracy on an uploaded video.`
+                  : "Verified aggregate evaluation results are unavailable; no substitute scores are displayed."}
               </p>
             </div>
 
@@ -864,25 +978,34 @@ export function ProductLandingPage() {
           <div className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3">
             <div className="border border-border bg-panel p-4 rounded-xl">
               <span className="label-xs">Clean Baseline F1</span>
-              <div className="text-2xl font-bold font-mono text-foreground mt-1">0.49199</div>
+              <div className="text-2xl font-bold font-mono text-foreground mt-1">
+                {evaluationConditions?.["CLEAN"]?.possession.mean.toFixed(3) ??
+                  "Data not available"}
+              </div>
               <p className="text-[11px] text-muted-foreground mt-1">
-                Ball-free possession inference reference with zero coordinate leakage.
+                Clean-reference possession F1, averaged across paired runs.
               </p>
             </div>
 
             <div className="border border-border bg-panel p-4 rounded-xl">
               <span className="label-xs">Synthetic Degraded F1</span>
-              <div className="text-2xl font-bold font-mono text-rose-400 mt-1">0.23451</div>
+              <div className="text-2xl font-bold font-mono text-rose-400 mt-1">
+                {evaluationConditions?.["SYNTHETIC-DEGRADED"]?.possession.mean.toFixed(3) ??
+                  "Data not available"}
+              </div>
               <p className="text-[11px] text-muted-foreground mt-1">
-                Dropouts, identity switches, and coordinate jitter simulate harsh broadcast cameras.
+                Mean possession F1 under the benchmark's synthetic degradation.
               </p>
             </div>
 
             <div className="border border-border bg-panel p-4 rounded-xl">
               <span className="label-xs">Mitigated Recovery F1</span>
-              <div className="text-2xl font-bold font-mono text-emerald-400 mt-1">0.41328</div>
+              <div className="text-2xl font-bold font-mono text-emerald-400 mt-1">
+                {evaluationConditions?.["NOISE-MITIGATED"]?.possession.mean.toFixed(3) ??
+                  "Data not available"}
+              </div>
               <p className="text-[11px] text-muted-foreground mt-1">
-                Bounded interpolation + Savitzky-Golay restores +0.178 F1 performance.
+                Mean possession F1 in the benchmark's mitigated condition.
               </p>
             </div>
 
@@ -899,8 +1022,12 @@ export function ProductLandingPage() {
           <div className="mt-6 border border-border/80 bg-panel-alt/50 p-4 rounded-xl text-xs text-muted-foreground leading-relaxed flex items-start gap-3">
             <ShieldCheck className="h-5 w-5 text-emerald-400 shrink-0 mt-0.5" />
             <div>
-              <strong className="text-foreground font-semibold">Strict Anti-Leakage Protocol: </strong>
-              All possession and tactical advantage metrics are evaluated strictly post-hoc. Ball coordinates are never consumed during feature extraction or model inference, ensuring verified generalization to unannotated broadcast cameras.
+              <strong className="text-foreground font-semibold">
+                Strict Anti-Leakage Protocol:{" "}
+              </strong>
+              All possession and tactical advantage metrics are evaluated strictly post-hoc. Ball
+              coordinates are never consumed during feature extraction or model inference, ensuring
+              verified generalization to unannotated broadcast cameras.
             </div>
           </div>
         </div>
@@ -920,7 +1047,8 @@ export function ProductLandingPage() {
                 Upload Your Match Footage & Reconstruct Game State
               </h2>
               <p className="text-xs sm:text-sm text-muted-foreground mt-2 leading-relaxed">
-                Connect your broadcast clip to calibrate pitch coordinates, extract player tracking, and observe live spatial game states in seconds.
+                Connect your broadcast clip to calibrate pitch coordinates, extract player tracking,
+                and observe live spatial game states in seconds.
               </p>
 
               <div className="mt-6 flex flex-wrap items-center justify-center gap-3">

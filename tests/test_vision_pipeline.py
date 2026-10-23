@@ -64,6 +64,16 @@ class TestPitchHomography(unittest.TestCase):
         self.assertIsNone(px_out)
         self.assertIsNone(py_out)
 
+    def test_raw_projection_preserves_landmarks_beyond_pitch_bounds(self):
+        h = PitchHomography(np.array([
+            [0.01, 0.0, 0.0],
+            [0.0, 0.01, 0.0],
+            [0.0, 0.0, 1.0],
+        ]))
+
+        self.assertEqual(h.project_point(120, 50)[0], 1.0)
+        self.assertAlmostEqual(h.project_raw(120, 50)[0], 1.2)
+
     def test_auto_estimate_does_not_calibrate_from_grass_contour(self):
         frame = np.full((120, 160, 3), [45, 150, 45], dtype=np.uint8)
 
@@ -362,4 +372,3 @@ class TestTrackPersistence(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
-

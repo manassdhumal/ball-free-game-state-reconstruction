@@ -1,7 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { useQuery } from "@tanstack/react-query";
 import { Panel, PageHeader } from "@/components/Panel";
-import { LineSeries } from "@/components/Charts";
-import { DEGRADATION_CURVE, ROBUSTNESS_CONDITIONS } from "@/lib/data";
+import { getStep83Stability } from "@/api/evaluation";
 
 export const Route = createFileRoute("/benchmark")({
   head: () => ({
@@ -9,16 +9,7 @@ export const Route = createFileRoute("/benchmark")({
       { title: "Robustness Benchmark — Ball-Free Game State Reconstruction" },
       {
         name: "description",
-        content:
-          "Standardised comparison of perturbation conditions with degradation and recovery curves across the evaluation suite.",
-      },
-      {
-        property: "og:title",
-        content: "Robustness Benchmark — Ball-Free Game State Reconstruction",
-      },
-      {
-        property: "og:description",
-        content: "Condition comparison table plus degradation and recovery curves.",
+        content: "Measured ranking stability by perturbation from the Step 83 evaluation artifact.",
       },
     ],
   }),
@@ -26,89 +17,78 @@ export const Route = createFileRoute("/benchmark")({
 });
 
 function Benchmark() {
+  const results = useQuery({
+    queryKey: ["robustness", "step83"],
+    queryFn: getStep83Stability,
+  });
+  const rows = results.data?.data ?? [];
+  const text = (value: string | number | undefined) => (value == null ? "—" : String(value));
+  const metric = (value: number | undefined) => (value == null ? "—" : value.toFixed(3));
+
   return (
     <>
       <PageHeader
         title="Robustness Benchmark"
-        description="Fixed benchmark suite run over 5 000 sampled frames per condition, seed-matched to the reference experiment EXP_080A_042."
+        description="Ranking stability measurements loaded from the Step 83 results artifact. Each row reports a tested method and perturbation; no interpolated degradation curve is substituted."
       />
-
-      <Panel title="Condition Comparison" className="mb-4">
-        <table className="w-full text-[11.5px]">
-          <thead>
-            <tr className="border-b border-border text-left">
-              <th className="label-xs py-1.5">Condition</th>
-              <th className="label-xs py-1.5 text-right">Top-1</th>
-              <th className="label-xs py-1.5 text-right">Top-3</th>
-              <th className="label-xs py-1.5 text-right">Spearman ρ</th>
-              <th className="label-xs py-1.5 text-right">Kendall τ</th>
-              <th className="label-xs py-1.5 text-right">Flip rate</th>
-              <th className="label-xs py-1.5 text-right">Possession F1</th>
-            </tr>
-          </thead>
-          <tbody>
-            {ROBUSTNESS_CONDITIONS.map((c) => (
-              <tr key={c.condition} className="border-b border-border/60">
-                <td className="py-1.5">{c.condition}</td>
-                <td className="num py-1.5 text-right">{c.top1.toFixed(2)}</td>
-                <td className="num py-1.5 text-right">{c.top3.toFixed(2)}</td>
-                <td className="num py-1.5 text-right">{c.spearman.toFixed(2)}</td>
-                <td className="num py-1.5 text-right">{c.kendall.toFixed(2)}</td>
-                <td className={`num py-1.5 text-right ${c.flip > 0.25 ? "text-warn" : ""}`}>
-                  {c.flip.toFixed(2)}
-                </td>
-                <td className={`num py-1.5 text-right ${c.f1 < 0.6 ? "text-destructive" : ""}`}>
-                  {c.f1.toFixed(3)}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </Panel>
-
-      <div className="grid gap-4 lg:grid-cols-2">
-        <Panel
-          title="Degradation Curve"
-          subtitle="Possession F1 against normalised perturbation severity"
-        >
-          <LineSeries
-            data={DEGRADATION_CURVE}
-            xKey="severity"
-            series={[{ key: "degraded", label: "Degraded", color: "var(--away)" }]}
-            height={260}
-          />
+      {results.isLoading ? (
+        <Panel title="Ranking stability">Loading benchmark rows…</Panel>
+      ) : results.isError || rows.length === 0 ? (
+        <Panel title="Benchmark unavailable">
+          {results.data?.availability.message ??
+            "No Step 83 ranking-stability measurements are available."}
         </Panel>
-
-        <Panel title="Recovery Curves" subtitle="Effect of interpolation and Kalman filtering">
-          <LineSeries
-            data={DEGRADATION_CURVE}
-            xKey="severity"
-            series={[
-              { key: "degraded", label: "No mitigation", color: "var(--away)" },
-              { key: "interpolated", label: "Linear interpolation", color: "var(--chart-5)" },
-              { key: "kalman", label: "Kalman filter", color: "var(--primary)" },
-            ]}
-            height={260}
-          />
-        </Panel>
-      </div>
-
-      <Panel title="Reading the Benchmark" className="mt-4">
-        <ul className="list-disc space-y-1.5 pl-4 text-[11.5px] leading-relaxed text-muted-foreground">
-          <li>
-            Top-1 retention degrades roughly linearly with dropout but non-linearly with coordinate
-            jitter beyond σ = 0.5 m.
-          </li>
-          <li>
-            Rank correlation stays above 0.7 for all mild conditions, meaning the ordering of
-            mid-ranked options is more stable than the identity of the single best option.
-          </li>
-          <li>
-            Kalman filtering recovers around 62% of the dropout-induced F1 loss but adds roughly 55%
-            runtime; it does not restore ranking identity at high severity.
-          </li>
-        </ul>
-      </Panel>
+      ) : (
+        <>
+          <Panel title="Measured perturbation outcomes">
+            <div className="overflow-x-auto">
+              <table className="w-full text-[11.5px]">
+                <thead>
+                  <tr className="border-b border-border text-left">
+                    <th className="label-xs py-1.5">Method</th>
+                    <th className="label-xs py-1.5">Perturbation</th>
+                    <th className="label-xs py-1.5">Severity</th>
+                    <th className="label-xs py-1.5 text-right">States</th>
+                    <th className="label-xs py-1.5 text-right">Top-1 retention</th>
+                    <th className="label-xs py-1.5 text-right">Top-3 retention</th>
+                    <th className="label-xs py-1.5 text-right">Spearman ρ</th>
+                    <th className="label-xs py-1.5 text-right">Kendall τ</th>
+                    <th className="label-xs py-1.5 text-right">Mean rank change</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {rows.map((row, index) => (
+                    <tr
+                      key={`${text(row.method)}-${text(row.perturbation)}-${text(row.severity)}-${index}`}
+                      className="border-b border-border/60"
+                    >
+                      <td className="py-1.5">{text(row.method)}</td>
+                      <td className="py-1.5">{text(row.perturbation)}</td>
+                      <td className="py-1.5">{text(row.severity)}</td>
+                      <td className="num py-1.5 text-right">{text(row.n_states)}</td>
+                      <td className="num py-1.5 text-right">{metric(row.top_1_retention)}</td>
+                      <td className="num py-1.5 text-right">{metric(row.top_3_retention)}</td>
+                      <td className="num py-1.5 text-right">{metric(row.spearman)}</td>
+                      <td className="num py-1.5 text-right">{metric(row.kendall)}</td>
+                      <td className="num py-1.5 text-right">
+                        {metric(row.average_rank_displacement)}
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </Panel>
+          <Panel title="Interpretation" className="mt-4">
+            <p className="text-[11.5px] leading-relaxed text-muted-foreground">
+              Retention measures whether the same candidate remains ranked first or within the top
+              three after perturbation. Rank correlations measure ordering consistency across
+              candidates. These are offline comparisons against the benchmark reference and do not
+              show the actual choice made by a player.
+            </p>
+          </Panel>
+        </>
+      )}
     </>
   );
 }

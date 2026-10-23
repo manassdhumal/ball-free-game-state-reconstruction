@@ -1,8 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useState } from "react";
-import { X } from "lucide-react";
+import { useMemo, useState } from "react";
+import { useQuery } from "@tanstack/react-query";
 import { Panel, PageHeader } from "@/components/Panel";
-import { EXPERIMENTS } from "@/lib/data";
+import { getStep80Runs } from "@/api/evaluation";
 
 export const Route = createFileRoute("/experiments")({
   head: () => ({
@@ -10,180 +10,131 @@ export const Route = createFileRoute("/experiments")({
       { title: "Experiments — Ball-Free Game State Reconstruction" },
       {
         name: "description",
-        content:
-          "Experiment register with configuration metadata, evaluation metrics, run status and per-run detail panels.",
+        content: "Reproducible tracking and mitigation rows from the Step 80 evaluation artifact.",
       },
-      { property: "og:title", content: "Experiments — Ball-Free Game State Reconstruction" },
-      { property: "og:description", content: "Experiment register and run metadata." },
     ],
   }),
   component: Experiments,
 });
 
 function Experiments() {
-  const [status, setStatus] = useState("all");
-  const [dataset, setDataset] = useState("all");
-  const [open, setOpen] = useState<string | null>(null);
-
-  const rows = EXPERIMENTS.filter(
-    (e) =>
-      (status === "all" || e.status === status) && (dataset === "all" || e.dataset === dataset),
+  const [severity, setSeverity] = useState("all");
+  const [method, setMethod] = useState("all");
+  const results = useQuery({
+    queryKey: ["robustness", "step80"],
+    queryFn: getStep80Runs,
+  });
+  const data = results.data?.data;
+  const availableRuns = data ?? [];
+  const severities = [
+    ...new Set(availableRuns.flatMap((row) => (row.severity ? [row.severity] : []))),
+  ];
+  const methods = [
+    ...new Set(
+      availableRuns.flatMap((row) => (row.mitigation_method ? [row.mitigation_method] : [])),
+    ),
+  ];
+  const rows = useMemo(
+    () =>
+      (data ?? []).filter(
+        (row) =>
+          (severity === "all" || row.severity === severity) &&
+          (method === "all" || row.mitigation_method === method),
+      ),
+    [data, severity, method],
   );
-  const detail = EXPERIMENTS.find((e) => e.id === open);
 
   return (
     <>
       <PageHeader
         title="Experiments"
-        description="Every evaluation run is recorded with its dataset, seed and resulting metrics. Runs are immutable once complete."
+        description="Measured run-level results from the Step 80 robustness artifact. Each row records its synthetic degradation severity, seed, time window and mitigation method."
       />
-
-      <Panel className="mb-4" bodyClassName="p-2.5">
-        <div className="flex flex-wrap items-center gap-3 text-[12px]">
-          <span className="label-xs">Filter</span>
-          <select
-            value={status}
-            onChange={(e) => setStatus(e.target.value)}
-            className="border border-input bg-panel-alt px-2 py-1"
-          >
-            {["all", "complete", "running", "queued"].map((s) => (
-              <option key={s} value={s}>
-                Status: {s}
-              </option>
-            ))}
-          </select>
-          <select
-            value={dataset}
-            onChange={(e) => setDataset(e.target.value)}
-            className="border border-input bg-panel-alt px-2 py-1"
-          >
-            {["all", ...new Set(EXPERIMENTS.map((e) => e.dataset))].map((d) => (
-              <option key={d} value={d}>
-                Dataset: {d}
-              </option>
-            ))}
-          </select>
-          <span className="num text-muted-foreground">{rows.length} runs</span>
-        </div>
-      </Panel>
-
-      <Panel title="Experiment Register">
-        <table className="w-full text-[11.5px]">
-          <thead>
-            <tr className="border-b border-border text-left">
-              <th className="label-xs py-1.5">Run ID</th>
-              <th className="label-xs py-1.5">Configuration</th>
-              <th className="label-xs py-1.5">Dataset</th>
-              <th className="label-xs py-1.5 text-right">Seed</th>
-              <th className="label-xs py-1.5 text-right">Poss F1</th>
-              <th className="label-xs py-1.5 text-right">MAE</th>
-              <th className="label-xs py-1.5 text-right">Event F1</th>
-              <th className="label-xs py-1.5 text-right">MRR</th>
-              <th className="label-xs py-1.5 text-right">Runtime</th>
-              <th className="label-xs py-1.5">Status</th>
-            </tr>
-          </thead>
-          <tbody>
-            {rows.map((e) => (
-              <tr
-                key={e.id}
-                onClick={() => setOpen(e.id)}
-                className="cursor-pointer border-b border-border/60 hover:bg-muted/50"
+      {results.isLoading ? (
+        <Panel title="Experiment results">Loading verified experiment rows…</Panel>
+      ) : results.isError || (data?.length ?? 0) === 0 ? (
+        <Panel title="Experiment results unavailable">
+          {results.data?.availability.message ?? "No Step 80 experiment rows are available."}
+        </Panel>
+      ) : (
+        <Panel title="Step 80 run register">
+          <div className="mb-3 flex flex-wrap items-center gap-3 text-[12px]">
+            <label className="flex items-center gap-2">
+              <span className="label-xs">Severity</span>
+              <select
+                value={severity}
+                onChange={(event) => setSeverity(event.target.value)}
+                className="border border-input bg-panel-alt px-2 py-1"
               >
-                <td className="num py-1.5">{e.id}</td>
-                <td className="py-1.5">{e.name}</td>
-                <td className="py-1.5 text-muted-foreground">{e.dataset}</td>
-                <td className="num py-1.5 text-right">{e.seed}</td>
-                <td className="num py-1.5 text-right">
-                  {e.possessionF1 ? e.possessionF1.toFixed(3) : "—"}
-                </td>
-                <td className="num py-1.5 text-right">
-                  {e.tacticalMae ? e.tacticalMae.toFixed(3) : "—"}
-                </td>
-                <td className="num py-1.5 text-right">{e.eventF1 ? e.eventF1.toFixed(3) : "—"}</td>
-                <td className="num py-1.5 text-right">{e.mrr ? e.mrr.toFixed(3) : "—"}</td>
-                <td className="num py-1.5 text-right">{e.runtime}</td>
-                <td
-                  className={`py-1.5 text-[10.5px] uppercase tracking-[0.05em] ${
-                    e.status === "complete"
-                      ? "text-primary"
-                      : e.status === "running"
-                        ? "text-warn"
-                        : "text-muted-foreground"
-                  }`}
-                >
-                  {e.status}
-                </td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </Panel>
-
-      {detail && (
-        <div
-          className="fixed inset-0 z-50 flex justify-end bg-black/50"
-          onClick={() => setOpen(null)}
-        >
-          <aside
-            className="h-full w-[420px] overflow-y-auto border-l border-border bg-panel p-4"
-            onClick={(ev) => ev.stopPropagation()}
-          >
-            <div className="mb-3 flex items-start justify-between">
-              <div>
-                <div className="num text-[14px] font-medium">{detail.id}</div>
-                <div className="text-[11.5px] text-muted-foreground">{detail.name}</div>
-              </div>
-              <button
-                onClick={() => setOpen(null)}
-                aria-label="Close"
-                className="p-1 hover:bg-muted"
+                <option value="all">All</option>
+                {severities.map((item) => (
+                  <option key={item}>{item}</option>
+                ))}
+              </select>
+            </label>
+            <label className="flex items-center gap-2">
+              <span className="label-xs">Mitigation</span>
+              <select
+                value={method}
+                onChange={(event) => setMethod(event.target.value)}
+                className="border border-input bg-panel-alt px-2 py-1"
               >
-                <X className="h-4 w-4" />
-              </button>
-            </div>
-
-            <dl className="text-[11.5px]">
-              {[
-                ["Dataset", detail.dataset],
-                ["Seed", String(detail.seed)],
-                ["Date", detail.date],
-                ["Runtime", detail.runtime],
-                ["Status", detail.status],
-                ["Possession F1", detail.possessionF1 ? detail.possessionF1.toFixed(3) : "—"],
-                ["Tactical MAE", detail.tacticalMae ? detail.tacticalMae.toFixed(3) : "—"],
-                ["Event F1", detail.eventF1 ? detail.eventF1.toFixed(3) : "—"],
-                ["Ranking MRR", detail.mrr ? detail.mrr.toFixed(3) : "—"],
-              ].map(([k, v]) => (
-                <div key={k} className="flex justify-between border-b border-border/60 py-1.5">
-                  <dt className="text-muted-foreground">{k}</dt>
-                  <dd className="num">{v}</dd>
-                </div>
-              ))}
-            </dl>
-
-            <div className="mt-4">
-              <div className="label-xs mb-1">Notes</div>
-              <p className="text-[11.5px] leading-relaxed text-muted-foreground">{detail.notes}</p>
-            </div>
-
-            <div className="mt-4">
-              <div className="label-xs mb-1">Configuration</div>
-              <pre className="num overflow-x-auto border border-border bg-panel-alt p-2.5 text-[11px] leading-relaxed text-muted-foreground">
-                {`pipeline: player_only_v0.8
-fps: 25
-features: 12
-possession_model: geometric_posterior
-ranking_weights:
-  space: 0.34
-  pressure: 0.26
-  clearance: 0.22
-  progression: 0.18
-ball_input: none`}
-              </pre>
-            </div>
-          </aside>
-        </div>
+                <option value="all">All</option>
+                {methods.map((item) => (
+                  <option key={item}>{item}</option>
+                ))}
+              </select>
+            </label>
+            <span className="num text-muted-foreground">{rows.length} measured runs</span>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-[11.5px]">
+              <thead>
+                <tr className="border-b border-border text-left">
+                  <th className="label-xs py-1.5">Severity</th>
+                  <th className="label-xs py-1.5 text-right">Seed</th>
+                  <th className="label-xs py-1.5">Window</th>
+                  <th className="label-xs py-1.5">Mitigation</th>
+                  <th className="label-xs py-1.5 text-right">Missingness</th>
+                  <th className="label-xs py-1.5 text-right">Possession precision</th>
+                  <th className="label-xs py-1.5 text-right">Possession recall</th>
+                  <th className="label-xs py-1.5 text-right">Possession F1</th>
+                  <th className="label-xs py-1.5 text-right">TAS MAE</th>
+                  <th className="label-xs py-1.5 text-right">Unresolved gaps</th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((row, index) => (
+                  <tr
+                    key={`${row.severity}-${row.seed}-${row.window}-${row.mitigation_method}-${index}`}
+                    className="border-b border-border/60"
+                  >
+                    <td className="py-1.5">{String(row.severity ?? "—")}</td>
+                    <td className="num py-1.5 text-right">{String(row.seed ?? "—")}</td>
+                    <td className="py-1.5">{String(row.window ?? "—")}</td>
+                    <td className="py-1.5">{String(row.mitigation_method ?? "—")}</td>
+                    <td className="num py-1.5 text-right">
+                      {row.missingness == null ? "—" : `${(row.missingness * 100).toFixed(1)}%`}
+                    </td>
+                    <td className="num py-1.5 text-right">
+                      {row.possession_precision?.toFixed(3) ?? "—"}
+                    </td>
+                    <td className="num py-1.5 text-right">
+                      {row.possession_recall?.toFixed(3) ?? "—"}
+                    </td>
+                    <td className="num py-1.5 text-right">
+                      {row.possession_f1?.toFixed(3) ?? "—"}
+                    </td>
+                    <td className="num py-1.5 text-right">{row.tas_mae?.toFixed(3) ?? "—"}</td>
+                    <td className="num py-1.5 text-right">
+                      {String(row.unresolved_gap_count ?? "—")}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </Panel>
       )}
     </>
   );

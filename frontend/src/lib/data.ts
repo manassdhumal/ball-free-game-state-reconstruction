@@ -2,10 +2,56 @@
 
 export type Team = "home" | "away";
 
+export const DEFAULT_TEAM_COLORS: Record<Team, string> = {
+  home: "#c83232",
+  away: "#3232c8",
+};
+
+export function teamColor(players: Player[], team: Team) {
+  const palette = players.find((player) => player.teamColors)?.teamColors;
+  return (
+    palette?.[team] ??
+    players.find((player) => player.team === team && player.jerseyColor)?.jerseyColor ??
+    DEFAULT_TEAM_COLORS[team]
+  );
+}
+
+export function jerseyColorName(color: string) {
+  const match = /^#?([0-9a-f]{6})$/i.exec(color);
+  if (!match) return "Team";
+  const value = match[1]!;
+  const red = parseInt(value.slice(0, 2), 16);
+  const green = parseInt(value.slice(2, 4), 16);
+  const blue = parseInt(value.slice(4, 6), 16);
+  const max = Math.max(red, green, blue);
+  const min = Math.min(red, green, blue);
+  if (max < 45) return "Black";
+  if (max - min < 22) return max > 215 ? "White" : "Gray";
+  if (red > 150 && green < 105 && blue < 125) return "Red";
+  if (red > 175 && green > 90 && green < 190 && blue < 100) return "Orange";
+  if (red > 165 && green > 150 && blue < 115) return "Yellow";
+  if (red > 140 && blue > 115 && green < 135) return "Pink";
+  if (blue > red * 1.12 && blue > green * 1.08) return red > 70 ? "Purple" : "Blue";
+  if (green > red * 1.12 && green > blue * 0.9) return "Green";
+  if (red > 100 && green > 65 && green < 155 && blue < 100) return "Brown";
+  return "Gray";
+}
+
+export function teamDisplayName(team: Team, players: Player[], overrides: Record<Team, string>) {
+  return overrides[team].trim() || jerseyColorName(teamColor(players, team));
+}
+
+export function displayTeamId(value: string, players: Player[], overrides: Record<Team, string>) {
+  return value.replace(/^(HOME|AWAY)(?=_)/i, (side) =>
+    teamDisplayName(side.toUpperCase() === "HOME" ? "home" : "away", players, overrides),
+  );
+}
+
 export interface Player {
   id: string;
   team: Team;
   jerseyColor?: string;
+  teamColors?: Record<Team, string>;
   number: number;
   name: string;
   role: string;
@@ -130,7 +176,7 @@ export function supportFor(p: Player, all: Player[]) {
 }
 
 export function teamGeometry(all: Player[], team: Team) {
-  const t = all.filter((p) => p.team === team && p.role !== "GK");
+  const t = all.filter((p) => p.team === team);
   const xs = t.map((p) => p.x);
   const ys = t.map((p) => p.y);
   const width = Math.max(...ys) - Math.min(...ys);
@@ -320,104 +366,69 @@ export const EVENT_EVAL = [
   { cls: "SET_PIECE", tp: 41, fp: 22, fn: 19, precision: 0.651, recall: 0.683, f1: 0.667 },
 ];
 
-export const STATE_FEATURES = [
-  {
-    key: "pressure_index",
-    label: "Pressure Index",
-    value: 0.412,
-    unit: "—",
-    type: "Model-Derived",
-    conf: 0.78,
-  },
-  {
-    key: "support_count",
-    label: "Support Count (r≤12m)",
-    value: 3,
-    unit: "players",
-    type: "Measured Proxy",
-    conf: 0.95,
-  },
-  {
-    key: "space_score",
-    label: "Space Score",
-    value: 0.641,
-    unit: "—",
-    type: "Model-Derived",
-    conf: 0.71,
-  },
-  {
-    key: "forward_options",
-    label: "Forward Options",
-    value: 4,
-    unit: "lines",
-    type: "Heuristic",
-    conf: 0.66,
-  },
-  {
-    key: "team_width_home",
-    label: "Team Width (Home)",
-    value: 41.8,
-    unit: "m",
-    type: "Measured Proxy",
-    conf: 0.97,
-  },
-  {
-    key: "team_length_home",
-    label: "Team Length (Home)",
-    value: 36.2,
-    unit: "m",
-    type: "Measured Proxy",
-    conf: 0.97,
-  },
-  {
-    key: "compactness",
-    label: "Compactness",
-    value: 0.548,
-    unit: "—",
-    type: "Heuristic",
-    conf: 0.74,
-  },
-  {
-    key: "def_spread",
-    label: "Defensive Spread",
-    value: 14.9,
-    unit: "m",
-    type: "Measured Proxy",
-    conf: 0.93,
-  },
-  {
-    key: "local_density",
-    label: "Local Density (r≤10m)",
-    value: 5,
-    unit: "players",
-    type: "Measured Proxy",
-    conf: 0.96,
-  },
-  {
-    key: "possessor_prob",
-    label: "Inferred Possessor Prob.",
-    value: 0.612,
-    unit: "—",
-    type: "Model-Derived",
-    conf: 0.61,
-  },
-  {
-    key: "transition_risk",
-    label: "Transition Risk",
-    value: 0.287,
-    unit: "—",
-    type: "Model-Derived",
-    conf: 0.58,
-  },
-  {
-    key: "line_break_pot",
-    label: "Line-Break Potential",
-    value: 0.334,
-    unit: "—",
-    type: "Heuristic",
-    conf: 0.63,
-  },
-];
+export function stateFeaturesFor(players: Player[], selected: Player) {
+  const team = teamGeometry(players, selected.team);
+  const opponents = players.filter((player) => player.team !== selected.team);
+  const nearestOpponentDistance = opponents.length
+    ? dist(selected, nearest(selected, opponents))
+    : null;
+  const supportCount = players.filter(
+    (player) =>
+      player.team === selected.team && player.id !== selected.id && dist(selected, player) <= 12,
+  ).length;
+  const confidenceValues = players
+    .map((player) => player.confidence)
+    .filter((value): value is number => value != null && Number.isFinite(value));
+  const trackingConfidence = confidenceValues.length
+    ? confidenceValues.reduce((sum, value) => sum + value, 0) / confidenceValues.length
+    : 0;
+  const feature = (
+    key: string,
+    label: string,
+    value: number | string,
+    unit: string,
+    type: string,
+    conf = trackingConfidence,
+  ) => ({ key, label, value, unit, type, conf });
+
+  return [
+    feature(
+      "pressure_index",
+      "Pressure Index",
+      pressureOn(selected, players).toFixed(3),
+      "—",
+      "Geometry proxy",
+    ),
+    feature("support_count", "Support Count (r≤12m)", supportCount, "players", "Measured proxy"),
+    feature(
+      "nearest_opponent_distance",
+      "Nearest Opponent Distance",
+      nearestOpponentDistance == null ? "Data not available" : nearestOpponentDistance.toFixed(1),
+      "m",
+      "Measured geometry",
+      nearestOpponentDistance == null ? 0 : trackingConfidence,
+    ),
+    feature("team_width", "Team Width", team.width.toFixed(1), "m", "Measured geometry"),
+    feature("team_length", "Team Length", team.length.toFixed(1), "m", "Measured geometry"),
+    feature("compactness", "Team Compactness", team.compactness.toFixed(3), "—", "Geometry proxy"),
+    feature("team_spread", "Team Spread", team.spread.toFixed(1), "m", "Measured geometry"),
+    feature(
+      "local_density",
+      "Local Density (r≤10m)",
+      localDensity(selected, players),
+      "players",
+      "Measured proxy",
+    ),
+    feature(
+      "forward_options",
+      "Forward Options",
+      "Not determined",
+      "—",
+      "Attack direction unavailable",
+      0,
+    ),
+  ];
+}
 
 export const ROBUSTNESS_CONDITIONS = [
   {

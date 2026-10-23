@@ -576,7 +576,7 @@ class CameraMotionTracker:
                     (pt_top, pt_bot) = half_line
                     mid_u = (pt_top[0] + pt_bot[0]) / 2.0
                     mid_v = (pt_top[1] + pt_bot[1]) / 2.0
-                    proj_x, _ = self.current_homography.project_point(mid_u, mid_v)
+                    proj_x, _ = self.current_homography.project_raw(mid_u, mid_v)
                     err_x = 0.50 - proj_x
                     if abs(err_x) > 0.005:
                         shift = float(np.clip(0.18 * err_x, -0.025, 0.025))
@@ -593,7 +593,7 @@ class CameraMotionTracker:
                     d_line, d_conf = PitchMarkingDetector.detect_d_line(frame, white_line_mask, pitch_contour)
                     if d_line is not None and d_conf >= 0.40:
                         apex_u, apex_v = d_line["apex"]
-                        proj_x, _ = self.current_homography.project_point(apex_u, apex_v)
+                        proj_x, _ = self.current_homography.project_raw(apex_u, apex_v)
                         target_x = 0.192 if d_line["side"] == "left" else 0.808
                         err_x = target_x - proj_x
                         if abs(err_x) > 0.005:

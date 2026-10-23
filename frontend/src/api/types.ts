@@ -17,6 +17,7 @@ export interface ApiPlayer {
   y: number | null;
   confidence: number;
   visible: boolean;
+  jersey_color: string | null;
 }
 export interface GameState {
   match_id: string;
@@ -24,6 +25,7 @@ export interface GameState {
   timestamp: number;
   fps: number;
   players: ApiPlayer[];
+  team_colors: Record<Team, string>;
   provenance: Record<string, unknown>;
 }
 export interface Match {

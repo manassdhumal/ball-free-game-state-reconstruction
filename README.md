@@ -65,11 +65,10 @@ The platform supports end-to-end video game-state reconstruction directly from u
 - `src/noise/`: Degradation, bounded interpolation, and Savitzky-Golay smoothing
 - `src/possession/`: Spatial graph and ball-free possession baseline
 - `src/tactics/`: Tactical Advantage Score (TAS) and counterfactual pass ranking
-- `src/vision/`: Video tracking (YOLOv8 + ByteTrack), 2D pitch homography, and jersey classification
+- `src/vision/`: Video tracking (YOLO26x + ByteTrack by default), 2D pitch homography, and jersey classification. The detector weights download on first use; pass a different `model_name` to `VideoGameStateTracker` to trade accuracy for speed.
 - `src/validation/`: Benchmark, statistical analysis, and cross-dataset validation
 - `backend/`: FastAPI adapter with match data and video processing endpoints
 - `frontend/`: Interactive React/Vite dashboard with live 2D pitch radar and Video Studio
 - `scripts/`: Offline processing, sample generation, and verification scripts
 - `docs/`: Technical specifications, architecture, and reproducibility reports
 - `tests/`: Automated unit tests and anti-leakage contracts
-

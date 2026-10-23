@@ -1,9 +1,8 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useState } from "react";
-import { ChevronRight } from "lucide-react";
+import { useQuery } from "@tanstack/react-query";
 import { Panel, PageHeader } from "@/components/Panel";
-import { LineSeries } from "@/components/Charts";
-import { DEGRADATION_CURVE, RECOVERY_TABLE } from "@/lib/data";
+import { BarSeries } from "@/components/Charts";
+import { getEvaluationSummary } from "@/api/evaluation";
 
 export const Route = createFileRoute("/recovery")({
   head: () => ({
@@ -11,133 +10,100 @@ export const Route = createFileRoute("/recovery")({
       { title: "Recovery & Mitigation — Ball-Free Game State Reconstruction" },
       {
         name: "description",
-        content:
-          "Reference to degraded to interpolated to Kalman-filtered recovery workflow with comparative F1, MAE and runtime.",
-      },
-      {
-        property: "og:title",
-        content: "Recovery & Mitigation — Ball-Free Game State Reconstruction",
-      },
-      {
-        property: "og:description",
-        content: "Interpolation and Kalman filtering as mitigation for degraded tracking input.",
+        content: "Observed recovery effects across verified clean, degraded and mitigated runs.",
       },
     ],
   }),
   component: Recovery,
 });
 
-const STAGES = [
-  {
-    key: "reference",
-    name: "Reference",
-    detail:
-      "Clean Metrica tracking, 22 tracks, no injected degradation. Baseline for all comparisons.",
-  },
-  {
-    key: "degraded",
-    name: "Degraded",
-    detail:
-      "15% player dropout and 0.5 m coordinate jitter applied. Support graph is the first stage to fail.",
-  },
-  {
-    key: "interpolated",
-    name: "Linear Interpolation",
-    detail:
-      "Gaps shorter than 12 frames filled linearly. Cheap, but produces implausible straight-line motion.",
-  },
-  {
-    key: "kalman",
-    name: "Kalman Filter",
-    detail:
-      "Constant-velocity model with per-track process noise. Best recovery, materially higher runtime.",
-  },
-];
-
 function Recovery() {
-  const [stage, setStage] = useState(0);
+  const report = useQuery({
+    queryKey: ["evaluation-summary"],
+    queryFn: getEvaluationSummary,
+  });
+  const summary = report.data?.data;
+  const conditions = summary?.summary_by_condition;
+  const chartData = conditions
+    ? Object.entries(conditions).map(([condition, metrics]) => ({
+        condition: condition.replaceAll("-", " "),
+        possessionF1: metrics.possession.mean,
+      }))
+    : [];
 
   return (
     <>
       <PageHeader
         title="Recovery & Mitigation"
-        description="Sequential mitigation workflow applied to degraded tracking input. Each stage is evaluated independently against the reference configuration."
+        description="Comparison of measured conditions in the paired evaluation report. This view does not treat a fitted curve or an unmeasured filter stage as observed performance."
       />
-
-      <Panel title="Workflow" className="mb-4">
-        <div className="flex flex-wrap items-center gap-2">
-          {STAGES.map((s, i) => (
-            <div key={s.key} className="flex items-center gap-2">
-              <button
-                onClick={() => setStage(i)}
-                className={`border px-3 py-2 text-left text-[12px] ${
-                  stage === i
-                    ? "border-primary bg-accent text-foreground"
-                    : "border-border text-muted-foreground"
-                }`}
-              >
-                <div className="label-xs">Stage {i + 1}</div>
-                {s.name}
-              </button>
-              {i < STAGES.length - 1 && <ChevronRight className="h-4 w-4 text-muted-foreground" />}
+      {report.isLoading ? (
+        <Panel title="Recovery analysis">Loading evaluation measurements…</Panel>
+      ) : report.isError || !summary || !conditions ? (
+        <Panel title="Recovery analysis unavailable">
+          {report.data?.availability.message ?? "No verified evaluation report is available."}
+        </Panel>
+      ) : (
+        <>
+          <Panel title="Measured condition comparison" className="mb-4">
+            <div className="overflow-x-auto">
+              <table className="w-full text-[11.5px]">
+                <thead>
+                  <tr className="border-b border-border text-left">
+                    <th className="label-xs py-1.5">Condition</th>
+                    <th className="label-xs py-1.5 text-right">Runs</th>
+                    <th className="label-xs py-1.5 text-right">Possession F1</th>
+                    <th className="label-xs py-1.5 text-right">Tactical MAE</th>
+                    <th className="label-xs py-1.5 text-right">Tracking missingness</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {Object.entries(conditions).map(([condition, metrics]) => (
+                    <tr key={condition} className="border-b border-border/60">
+                      <td className="py-1.5">{condition.replaceAll("-", " ")}</td>
+                      <td className="num py-1.5 text-right">{metrics.possession.count}</td>
+                      <td className="num py-1.5 text-right">
+                        {metrics.possession.mean.toFixed(3)}
+                      </td>
+                      <td className="num py-1.5 text-right">{metrics.tactical.mean.toFixed(3)}</td>
+                      <td className="num py-1.5 text-right">
+                        {(metrics.tracking.mean * 100).toFixed(1)}%
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
             </div>
-          ))}
-        </div>
-        <p className="mt-3 max-w-3xl text-[11.5px] leading-relaxed text-muted-foreground">
-          {STAGES[stage]!.detail}
-        </p>
-      </Panel>
+          </Panel>
 
-      <div className="grid gap-4 xl:grid-cols-[1fr_1fr]">
-        <Panel
-          title="Comparative Metrics"
-          subtitle="Each stage against the reference configuration"
-        >
-          <table className="w-full text-[11.5px]">
-            <thead>
-              <tr className="border-b border-border text-left">
-                <th className="label-xs py-1.5">Stage</th>
-                <th className="label-xs py-1.5 text-right">Possession F1</th>
-                <th className="label-xs py-1.5 text-right">Tactical MAE</th>
-                <th className="label-xs py-1.5 text-right">Ranking MRR</th>
-                <th className="label-xs py-1.5 text-right">Runtime</th>
-              </tr>
-            </thead>
-            <tbody>
-              {RECOVERY_TABLE.map((r, i) => (
-                <tr
-                  key={r.stage}
-                  className={`border-b border-border/60 ${stage === i ? "bg-accent/40" : ""}`}
-                >
-                  <td className="py-1.5">{r.stage}</td>
-                  <td className="num py-1.5 text-right">{r.f1.toFixed(3)}</td>
-                  <td className="num py-1.5 text-right">{r.mae.toFixed(3)}</td>
-                  <td className="num py-1.5 text-right">{r.mrr.toFixed(3)}</td>
-                  <td className="num py-1.5 text-right">{r.runtime}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-          <div className="mt-3 border border-border bg-panel-alt p-2.5 text-[11.5px] leading-relaxed text-muted-foreground">
-            Kalman filtering recovers 0.054 F1 of the 0.089 lost to degradation — approximately 61%
-            — at a 74% runtime increase over the degraded pipeline. Interpolation recovers 40% at
-            negligible cost.
+          <div className="grid gap-4 lg:grid-cols-2">
+            <Panel
+              title="Possession F1 by measured condition"
+              subtitle="Run means from the evaluation report"
+            >
+              <BarSeries
+                data={chartData}
+                xKey="condition"
+                series={[{ key: "possessionF1", label: "Possession F1", color: "var(--primary)" }]}
+              />
+            </Panel>
+            <Panel
+              title="Reported paired recovery"
+              subtitle={`${summary.possession_recovery.n} paired runs`}
+            >
+              <p className="num text-2xl">
+                +{summary.possession_recovery.abs_improvement.toFixed(3)} F1
+              </p>
+              <p className="mt-2 text-[11.5px] leading-relaxed text-muted-foreground">
+                The report estimates{" "}
+                {(summary.possession_recovery.recovery_fraction * 100).toFixed(1)}% recovery of the
+                degradation-associated F1 loss. This aggregate does not isolate a specific
+                interpolation or filtering algorithm.
+              </p>
+            </Panel>
           </div>
-        </Panel>
-
-        <Panel title="Recovery Across Severity" subtitle="Possession F1 by mitigation strategy">
-          <LineSeries
-            data={DEGRADATION_CURVE}
-            xKey="severity"
-            series={[
-              { key: "degraded", label: "No mitigation", color: "var(--away)" },
-              { key: "interpolated", label: "Interpolation", color: "var(--chart-5)" },
-              { key: "kalman", label: "Kalman", color: "var(--primary)" },
-            ]}
-            height={300}
-          />
-        </Panel>
-      </div>
+        </>
+      )}
     </>
   );
 }

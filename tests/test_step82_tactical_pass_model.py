@@ -65,6 +65,20 @@ class TestStep82TacticalPassModel(unittest.TestCase):
         self.assertEqual(metrics.iloc[0]["n_ranked_states"], 1)
         self.assertTrue(np.isfinite(metrics.to_numpy(dtype=float)).all())
 
+    def test_ranking_can_exclude_forward_progress_when_attack_direction_is_unknown(self):
+        state = snapshot()
+        model = fit_pass_model(generate_pass_candidates(state, "HOME_1"), [1, 0], {})
+        directional = rank_counterfactual_passes(state, model, "HOME_1")
+        direction_unknown = rank_counterfactual_passes(
+            state, model, "HOME_1", {"include_forward_progress": False}
+        )
+
+        directional = directional.set_index("target_player_id")
+        direction_unknown = direction_unknown.set_index("target_player_id")
+        expected = 0.20 * np.clip(directional["forward_progress"] / 0.35, -1, 1)
+        actual = directional["tactical_value"] - direction_unknown["tactical_value"]
+        np.testing.assert_allclose(actual.sort_index(), expected.sort_index())
+
 
 if __name__ == "__main__":
     unittest.main()

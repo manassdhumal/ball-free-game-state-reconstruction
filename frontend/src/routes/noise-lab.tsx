@@ -1,10 +1,12 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useState } from "react";
+import { useMemo, useState } from "react";
 import { Metric, Panel, PageHeader } from "@/components/Panel";
 import { Pitch } from "@/components/Pitch";
-import { LineSeries } from "@/components/Charts";
-import { buildFrame } from "@/lib/data";
+import { useLivePlayers } from "@/hooks/useGameState";
 import { useSession } from "@/lib/session";
+import type { Player } from "@/lib/data";
+
+const EMPTY_PLAYERS: Player[] = [];
 
 export const Route = createFileRoute("/noise-lab")({
   head: () => ({
@@ -13,133 +15,139 @@ export const Route = createFileRoute("/noise-lab")({
       {
         name: "description",
         content:
-          "Interactive noise injection for missing detections, track gaps, coordinate jitter and fragmentation with live impact preview.",
-      },
-      { property: "og:title", content: "Noise Lab — Ball-Free Game State Reconstruction" },
-      {
-        property: "og:description",
-        content: "Inject tracking noise and preview its effect on the reconstructed state.",
+          "Apply controlled synthetic detection dropout and coordinate noise to the selected live frame.",
       },
     ],
   }),
   component: NoiseLab,
 });
 
+function stableUnit(seed: string) {
+  let value = 2166136261;
+  for (let index = 0; index < seed.length; index += 1) {
+    value ^= seed.charCodeAt(index);
+    value = Math.imul(value, 16777619);
+  }
+  return (value >>> 0) / 4294967295;
+}
+
 function NoiseLab() {
-  const { frame } = useSession();
+  const { matchId, frame } = useSession();
+  const state = useLivePlayers(matchId, frame);
+  const players = state.data ?? EMPTY_PLAYERS;
   const [missing, setMissing] = useState(8);
-  const [gaps, setGaps] = useState(12);
   const [sigma, setSigma] = useState(0.4);
-  const [frag, setFrag] = useState(0.2);
 
-  const base = buildFrame(frame);
-  let s = 991;
-  const rnd = () => {
-    s = (s * 1664525 + 1013904223) % 4294967296;
-    return s / 4294967296;
-  };
-  const noisy = base
-    .filter(() => rnd() > missing / 100)
-    .map((p) => ({
-      ...p,
-      x: p.x + (rnd() - 0.5) * 2 * sigma,
-      y: p.y + (rnd() - 0.5) * 2 * sigma,
-    }));
+  const noisy = useMemo(() => {
+    const ranked = [...players].sort(
+      (a, b) => stableUnit(`${frame}:${a.id}:drop`) - stableUnit(`${frame}:${b.id}:drop`),
+    );
+    const dropCount = Math.round((ranked.length * missing) / 100);
+    const dropped = new Set(ranked.slice(0, dropCount).map((player) => player.id));
+    return players
+      .filter((player) => !dropped.has(player.id))
+      .map((player) => {
+        const dx = (stableUnit(`${frame}:${player.id}:x`) * 2 - 1) * sigma;
+        const dy = (stableUnit(`${frame}:${player.id}:y`) * 2 - 1) * sigma;
+        return {
+          ...player,
+          x: Math.min(105, Math.max(0, player.x + dx)),
+          y: Math.min(68, Math.max(0, player.y + dy)),
+        };
+      });
+  }, [players, frame, missing, sigma]);
 
-  const severity = missing / 100 + sigma / 2 + frag / 2 + gaps / 200;
-  const f1 = 0.741 * Math.exp(-1.05 * severity);
-  const mae = 0.118 * (1 + 1.9 * severity);
-  const mrr = 0.583 * Math.exp(-0.95 * severity);
+  const totalDisplacement = noisy.reduce((sum, player) => {
+    const original = players.find((item) => item.id === player.id);
+    return sum + (original ? Math.hypot(player.x - original.x, player.y - original.y) : 0);
+  }, 0);
+  const meanDisplacement = noisy.length ? totalDisplacement / noisy.length : null;
 
-  const curve = Array.from({ length: 11 }, (_, i) => {
-    const sev = (i / 10) * Math.max(0.2, severity * 2);
-    return {
-      severity: +sev.toFixed(2),
-      f1: +(0.741 * Math.exp(-1.05 * sev)).toFixed(3),
-      mrr: +(0.583 * Math.exp(-0.95 * sev)).toFixed(3),
-    };
-  });
+  if (state.isLoading)
+    return <PageHeader title="Noise Lab" description="Loading the selected tracked frame…" />;
+  if (state.isError || players.length === 0)
+    return (
+      <PageHeader
+        title="Noise Lab"
+        description="No live tracking is available for the selected frame. Synthetic degradation is disabled until observed player positions are available."
+      />
+    );
 
   return (
     <>
       <PageHeader
         title="Noise Lab"
-        description="Apply synthetic tracking degradation to the current frame and observe the immediate effect on the reconstructed state and downstream metrics. Impact estimates use the fitted degradation model from the robustness benchmark."
+        description={`Controlled, deterministic perturbation of observed tracking at frame ${frame}. This is a visualization of the configured input damage, not a prediction of model accuracy.`}
       />
 
-      <Panel title="Noise Parameters" className="mb-4">
-        <div className="grid gap-4 md:grid-cols-4">
+      <Panel title="Synthetic input perturbation" className="mb-4">
+        <div className="grid gap-4 md:grid-cols-2">
           {[
             {
-              label: "Missing detections (%)",
-              v: missing,
+              label: "Detection dropout (%)",
+              value: missing,
               set: setMissing,
               min: 0,
               max: 40,
               step: 1,
             },
-            { label: "Track gaps (per min)", v: gaps, set: setGaps, min: 0, max: 60, step: 1 },
-            { label: "Jitter σ (m)", v: sigma, set: setSigma, min: 0, max: 2, step: 0.05 },
-            { label: "Fragmentation", v: frag, set: setFrag, min: 0, max: 1, step: 0.05 },
-          ].map((c) => (
-            <div key={c.label}>
-              <div className="flex justify-between">
-                <span className="label-xs">{c.label}</span>
-                <span className="num text-[11.5px] text-primary">{c.v}</span>
-              </div>
+            {
+              label: "Coordinate jitter limit (m)",
+              value: sigma,
+              set: setSigma,
+              min: 0,
+              max: 2,
+              step: 0.05,
+            },
+          ].map((control) => (
+            <label key={control.label}>
+              <span className="flex justify-between">
+                <span className="label-xs">{control.label}</span>
+                <span className="num text-[11.5px] text-primary">{control.value}</span>
+              </span>
               <input
                 type="range"
-                min={c.min}
-                max={c.max}
-                step={c.step}
-                value={c.v}
-                onChange={(e) => c.set(Number(e.target.value))}
+                min={control.min}
+                max={control.max}
+                step={control.step}
+                value={control.value}
+                onChange={(event) => control.set(Number(event.target.value))}
                 className="mt-1.5 h-1 w-full accent-[var(--primary)]"
               />
-            </div>
+            </label>
           ))}
         </div>
+        <p className="mt-3 text-[11px] text-muted-foreground">
+          Jitter is applied independently on each pitch axis and clipped to the pitch boundary.
+          Dropout is selected deterministically so the same frame and settings reproduce the same
+          result.
+        </p>
       </Panel>
 
       <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-4">
-        <Metric label="Tracks Retained" value={`${noisy.length} / ${base.length}`} />
+        <Metric label="Observed tracks" value={String(players.length)} />
+        <Metric label="Synthetic tracks dropped" value={String(players.length - noisy.length)} />
+        <Metric label="Tracks retained" value={`${noisy.length} / ${players.length}`} />
         <Metric
-          label="Projected Possession F1"
-          value={f1.toFixed(3)}
-          tone={f1 < 0.6 ? "warn" : "primary"}
+          label="Mean displacement"
+          value={
+            meanDisplacement === null ? "Data not available" : `${meanDisplacement.toFixed(2)} m`
+          }
+          sub="Among retained tracks"
         />
-        <Metric label="Projected Tactical MAE" value={mae.toFixed(3)} />
-        <Metric label="Projected Ranking MRR" value={mrr.toFixed(3)} />
       </div>
 
       <div className="grid gap-4 xl:grid-cols-2">
-        <Panel title="Reference State" subtitle={`Frame ${frame} · clean tracking`}>
-          <Pitch players={base} showVectors={false} height={340} />
+        <Panel title="Observed state" subtitle={`Live tracking · frame ${frame}`}>
+          <Pitch players={players} showVectors={false} height={340} />
         </Panel>
-        <Panel title="Degraded State" subtitle="After noise injection">
+        <Panel
+          title="Synthetic degraded state"
+          subtitle="Observed state plus selected perturbations"
+        >
           <Pitch players={noisy} showVectors={false} height={340} />
         </Panel>
       </div>
-
-      <Panel
-        title="Impact Preview"
-        subtitle="Fitted metric response across the swept severity range"
-        className="mt-4"
-      >
-        <LineSeries
-          data={curve}
-          xKey="severity"
-          series={[
-            { key: "f1", label: "Possession F1", color: "var(--primary)" },
-            { key: "mrr", label: "Ranking MRR", color: "var(--home)" },
-          ]}
-          height={240}
-        />
-        <p className="mt-2 text-[11px] text-muted-foreground">
-          Current composite severity: <span className="num">{severity.toFixed(3)}</span>.
-          Projections are extrapolations of the benchmark fit, not fresh evaluations.
-        </p>
-      </Panel>
     </>
   );
 }

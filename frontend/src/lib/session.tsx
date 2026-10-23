@@ -1,4 +1,5 @@
-import { createContext, useContext, useMemo, useState, useEffect, type ReactNode } from "react";
+import { createContext, useContext, useMemo, useState, type ReactNode } from "react";
+import type { Team } from "@/lib/data";
 
 interface SessionValue {
   matchId: string;
@@ -10,6 +11,8 @@ interface SessionValue {
   fps: number;
   selectedPlayer: string | null;
   setSelectedPlayer: (id: string | null) => void;
+  teamNames: Record<Team, string>;
+  setTeamName: (team: Team, name: string) => void;
   isVideo: boolean;
 }
 
@@ -36,29 +39,55 @@ const getInitialNum = (key: string, fallback: number) => {
 
 export function SessionProvider({ children }: { children: ReactNode }) {
   const [frame, setFrameState] = useState(() => getInitialNum("bf_session_frame", 1250));
-  const [matchId, setMatchIdState] = useState(() => getInitial("bf_session_matchId", "metrica_game1"));
-  const [dataset, setDatasetState] = useState(() => getInitial("bf_session_dataset", "Metrica Sample_Game_1"));
-  const [selectedPlayer, setSelectedPlayerState] = useState<string | null>(() => getInitial("bf_session_player", "HOME_10"));
+  const [matchId, setMatchIdState] = useState(() =>
+    getInitial("bf_session_matchId", "metrica_game1"),
+  );
+  const [dataset, setDatasetState] = useState(() =>
+    getInitial("bf_session_dataset", "Metrica Sample_Game_1"),
+  );
+  const [selectedPlayer, setSelectedPlayerState] = useState<string | null>(() =>
+    getInitial("bf_session_player", "HOME_10"),
+  );
+  const [teamNames, setTeamNames] = useState<Record<Team, string>>(() => {
+    if (typeof window === "undefined") return { home: "", away: "" };
+    try {
+      const stored = localStorage.getItem("bf_session_team_names");
+      if (!stored) return { home: "", away: "" };
+      const names = JSON.parse(stored) as Partial<Record<Team, string>>;
+      return {
+        home: typeof names.home === "string" ? names.home : "",
+        away: typeof names.away === "string" ? names.away : "",
+      };
+    } catch {
+      return { home: "", away: "" };
+    }
+  });
 
   const setFrame = (f: number) => {
     setFrameState(f);
     try {
       localStorage.setItem("bf_session_frame", String(f));
-    } catch {}
+    } catch {
+      return;
+    }
   };
 
   const setMatchId = (m: string) => {
     setMatchIdState(m);
     try {
       localStorage.setItem("bf_session_matchId", m);
-    } catch {}
+    } catch {
+      return;
+    }
   };
 
   const setDataset = (d: string) => {
     setDatasetState(d);
     try {
       localStorage.setItem("bf_session_dataset", d);
-    } catch {}
+    } catch {
+      return;
+    }
   };
 
   const setSelectedPlayer = (id: string | null) => {
@@ -66,7 +95,21 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     try {
       if (id) localStorage.setItem("bf_session_player", id);
       else localStorage.removeItem("bf_session_player");
-    } catch {}
+    } catch {
+      return;
+    }
+  };
+
+  const setTeamName = (team: Team, name: string) => {
+    setTeamNames((current) => {
+      const next = { ...current, [team]: name };
+      try {
+        localStorage.setItem("bf_session_team_names", JSON.stringify(next));
+      } catch {
+        return next;
+      }
+      return next;
+    });
   };
 
   const isVideo = matchId.startsWith("uploaded_") || matchId.startsWith("video_");
@@ -82,9 +125,11 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       fps: 25,
       selectedPlayer,
       setSelectedPlayer,
+      teamNames,
+      setTeamName,
       isVideo,
     }),
-    [matchId, frame, dataset, selectedPlayer, isVideo],
+    [matchId, frame, dataset, selectedPlayer, teamNames, isVideo],
   );
   return <Ctx.Provider value={value}>{children}</Ctx.Provider>;
 }
@@ -94,4 +139,3 @@ export function useSession() {
   if (!v) throw new Error("useSession must be used inside SessionProvider");
   return v;
 }
-

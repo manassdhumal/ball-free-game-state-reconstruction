@@ -4,6 +4,7 @@ import { Panel, PageHeader } from "@/components/Panel";
 import { Pitch, PitchLegend } from "@/components/Pitch";
 import { useLivePassRanking, useLivePlayers } from "@/hooks/useGameState";
 import { useSession } from "@/lib/session";
+import { dist, teamDisplayName } from "@/lib/data";
 import { Video } from "lucide-react";
 
 export const Route = createFileRoute("/counterfactual")({
@@ -40,7 +41,7 @@ export function Disclaimer() {
 }
 
 function Counterfactual() {
-  const { matchId, frame, selectedPlayer, setSelectedPlayer } = useSession();
+  const { matchId, frame, selectedPlayer, setSelectedPlayer, teamNames } = useSession();
   const isVideo = matchId.startsWith("uploaded_") || matchId.startsWith("video_");
   const playerState = useLivePlayers(matchId, frame);
   const players = useMemo(() => playerState.data ?? [], [playerState.data]);
@@ -48,21 +49,24 @@ function Counterfactual() {
   const source = players.find((p) => p.id === selectedPlayer) ?? players[0];
   const ranking = useLivePassRanking(matchId, frame, source?.id ?? null);
   const candidates = useMemo(() => {
-    const rows = (ranking.data?.data as Array<Record<string, unknown>> | undefined) ?? [];
-    return rows.map((row, index) => {
-      const rawTarget = String(row.target_player_id ?? "");
-      const targetId = `${source?.team.toUpperCase() ?? "HOME"}_${rawTarget}`;
+    const rows = ranking.data?.data ?? [];
+    return rows.flatMap((row) => {
+      const targetId = `${source?.team.toUpperCase() ?? "HOME"}_${row.target_player_id}`;
       const targetPlayer = players.find((player) => player.id === targetId);
+      if (!source || !targetPlayer) return [];
       return {
-        rank: Number(row.rank ?? index + 1),
+        rank: row.rank,
         targetId,
-        target: targetPlayer?.name ?? targetId,
-        distance: Number(row.pass_distance ?? 0) * 105,
-        pressure: Number(row.target_pressure ?? 0),
-        space: Number(row.target_space ?? 0),
-        obstruction: Number(row.line_obstruction ?? 0),
-        score: Number(row.decision_score ?? 0),
-        stability: null,
+        target: targetPlayer.name,
+        distance: dist(source, targetPlayer),
+        pressure: row.target_pressure,
+        space: row.target_space,
+        obstruction: row.line_obstruction,
+        score: row.decision_score,
+        forwardProgress: row.forward_progress,
+        supportCount: row.support_count,
+        completion: row.pass_completion_probability,
+        tacticalValue: row.tactical_value,
       };
     });
   }, [ranking.data, players, source]);
@@ -79,6 +83,13 @@ function Counterfactual() {
         description="Data not available. Start the backend and select a valid frame."
       />
     );
+  if (!top)
+    return (
+      <PageHeader
+        title="Counterfactual Decisions"
+        description="No ranked passing options are available for the selected frame and player."
+      />
+    );
 
   return (
     <>
@@ -87,19 +98,32 @@ function Counterfactual() {
         description="For a chosen source player, the model enumerates every teammate as a hypothetical receiving option and ranks them by a weighted decision score. No ball or intent information enters this computation."
       />
 
+      {ranking.data?.availability.message && (
+        <div className="mb-4 border border-border bg-panel-alt px-3 py-2 text-[11px] text-muted-foreground">
+          {ranking.data.availability.message}
+        </div>
+      )}
+
       {isVideo && (
         <div className="mb-3.5 flex flex-wrap items-center justify-between gap-2 border border-emerald-500/40 bg-emerald-500/10 px-3.5 py-2 rounded text-xs">
           <div className="flex items-center gap-2 text-emerald-400">
             <Video className="h-4 w-4 shrink-0" />
             <span>
-              <strong>Video Perception Options:</strong> Counterfactual passing lines for {matchId} (Frame {frame})
+              <strong>Video Perception Options:</strong> Counterfactual passing lines for {matchId}{" "}
+              (Frame {frame})
             </span>
           </div>
           <div className="flex items-center gap-3">
-            <Link to="/match-explorer" className="text-[11px] font-semibold text-emerald-400 hover:text-emerald-300 underline">
+            <Link
+              to="/match-explorer"
+              className="text-[11px] font-semibold text-emerald-400 hover:text-emerald-300 underline"
+            >
               Match Explorer
             </Link>
-            <Link to="/broadcast" className="text-[11px] font-semibold text-emerald-400 hover:text-emerald-300 underline">
+            <Link
+              to="/broadcast"
+              className="text-[11px] font-semibold text-emerald-400 hover:text-emerald-300 underline"
+            >
               Video Studio
             </Link>
           </div>
@@ -122,7 +146,7 @@ function Counterfactual() {
               .filter((p) => p.role !== "GK")
               .map((p) => (
                 <option key={p.id} value={p.id}>
-                  {p.team === "home" ? "HOME" : "AWAY"} · #{p.number} {p.name} ({p.role})
+                  {teamDisplayName(p.team, players, teamNames)} · #{p.number} {p.name} ({p.role})
                 </option>
               ))}
           </select>
@@ -149,52 +173,62 @@ function Counterfactual() {
             }))}
           />
           <div className="mt-2">
-            <PitchLegend />
+            <PitchLegend players={players} />
           </div>
         </Panel>
 
-        <Panel title="Why this option ranked here" subtitle={`Rank 1 · ${top.target}`}>
+        <Panel title="Rank-1 evidence" subtitle={`Rank 1 · ${top.target}`}>
           <div className="space-y-2 text-[11.5px]">
             {[
               {
-                k: "Space (weight 0.34)",
-                v: top?.space ?? 0,
-                note: top
-                  ? `Nearest opponent to the target is ${(top.space * 12).toFixed(1)} m away, the largest separation among viable receivers.`
-                  : "Data not available.",
+                k: "Heuristic completion score",
+                v: top.completion,
+                note: "Fixed player-only baseline; this value is not calibrated as a real pass-completion probability.",
               },
               {
-                k: "Inverse pressure (weight 0.26)",
-                v: +(1 - (top?.pressure ?? 0)).toFixed(3),
-                note: top
-                  ? `Target pressure index is ${top.pressure.toFixed(3)}.`
-                  : "Data not available.",
+                k: "Composite tactical value",
+                v: top.tacticalValue,
+                note: "Weighted spatial score using progress when known, target space, support, pressure and distance.",
               },
               {
-                k: "Line clearance (weight 0.22)",
-                v: +(1 - (top?.obstruction ?? 0)).toFixed(3),
-                note: top
-                  ? top.obstruction === 0
-                    ? "No opponent intersects the 3.5 m corridor along this line."
-                    : "At least one opponent lies within the 3.5 m corridor; the option is penalised accordingly."
-                  : "Data not available.",
+                k: "Forward progress (normalized)",
+                v: top.forwardProgress,
+                note:
+                  top.forwardProgress == null
+                    ? "Not included because attack direction is unknown for this clip."
+                    : "Direction-aware pitch-axis displacement; not expected threat.",
               },
               {
-                k: "Forward progression (weight 0.18)",
-                v: +((top?.distance ?? 0) / 105).toFixed(3),
-                note: "Measured as normalised gain along the attacking axis, not as expected threat.",
+                k: "Target-space index (normalized)",
+                v: top.space,
+                note: "Nearest-opponent separation in normalized pitch coordinates.",
+              },
+              {
+                k: "Target-pressure index (normalized)",
+                v: top.pressure,
+                note: "Nearest-opponent distance proxy in normalized pitch coordinates.",
+              },
+              {
+                k: "Supporting teammates",
+                v: top.supportCount,
+                note: "Count from the player-only support radius in the source model.",
+              },
+              {
+                k: "Opponents intersecting pass line",
+                v: top.obstruction,
+                note: "Observed obstruction count from the candidate segment geometry.",
               },
             ].map((r) => (
               <div key={r.k} className="border border-border bg-panel-alt p-2.5">
                 <div className="flex items-center justify-between">
                   <span>{r.k}</span>
-                  <span className="num text-primary">{r.v}</span>
-                </div>
-                <div className="mt-1 h-1 w-full bg-muted">
-                  <div
-                    className="h-full bg-primary"
-                    style={{ width: `${Math.min(100, r.v * 100)}%` }}
-                  />
+                  <span className="num text-primary">
+                    {typeof r.v !== "number"
+                      ? "Data not available"
+                      : r.k === "Supporting teammates" || r.k === "Opponents intersecting pass line"
+                        ? String(r.v)
+                        : r.v.toFixed(3)}
+                  </span>
                 </div>
                 <p className="mt-1.5 text-[11px] leading-relaxed text-muted-foreground">{r.note}</p>
               </div>
@@ -202,16 +236,14 @@ function Counterfactual() {
             <div className="border border-border p-2.5">
               <div className="flex items-center justify-between">
                 <span className="label-xs">Composite decision score</span>
-                <span className="num text-[15px] text-primary">
-                  {top ? top.score.toFixed(3) : "Data not available"}
-                </span>
+                <span className="num text-[15px] text-primary">{top.score.toFixed(3)}</span>
               </div>
               <div className="mt-1 flex items-center justify-between text-[11px] text-muted-foreground">
                 <span>Margin over rank 2</span>
                 <span className="num">
-                  {top
-                    ? (top.score - (candidates[1]?.score ?? 0)).toFixed(3)
-                    : "Data not available"}
+                  {candidates[1]
+                    ? (top.score - candidates[1].score).toFixed(3)
+                    : "Only one candidate"}
                 </span>
               </div>
               <div className="mt-0.5 flex items-center justify-between text-[11px] text-muted-foreground">
@@ -234,9 +266,9 @@ function Counterfactual() {
               <th className="label-xs py-1.5">Rank</th>
               <th className="label-xs py-1.5">Target</th>
               <th className="label-xs py-1.5 text-right">Distance (m)</th>
-              <th className="label-xs py-1.5 text-right">Pressure</th>
-              <th className="label-xs py-1.5 text-right">Space</th>
-              <th className="label-xs py-1.5 text-right">Line obstruction</th>
+              <th className="label-xs py-1.5 text-right">Pressure (normalized)</th>
+              <th className="label-xs py-1.5 text-right">Space (normalized)</th>
+              <th className="label-xs py-1.5 text-right">Obstructing players</th>
               <th className="label-xs py-1.5 text-right">Decision score</th>
               <th className="label-xs py-1.5 text-right">Stability</th>
             </tr>
@@ -254,11 +286,11 @@ function Counterfactual() {
                 <td className="num py-1.5 text-right">{c.distance.toFixed(1)}</td>
                 <td className="num py-1.5 text-right">{c.pressure.toFixed(3)}</td>
                 <td className="num py-1.5 text-right">{c.space.toFixed(3)}</td>
-                <td className="num py-1.5 text-right">{c.obstruction.toFixed(3)}</td>
+                <td className="num py-1.5 text-right">{c.obstruction}</td>
                 <td className={`num py-1.5 text-right ${c.rank === 1 ? "text-primary" : ""}`}>
                   {c.score.toFixed(3)}
                 </td>
-                <td className="num py-1.5 text-right">Data not available</td>
+                <td className="num py-1.5 text-right">Not measured</td>
               </tr>
             ))}
           </tbody>

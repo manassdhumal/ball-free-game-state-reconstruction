@@ -3,6 +3,8 @@ from __future__ import annotations
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
+import json
+import re
 import sys
 
 import pandas as pd
@@ -65,6 +67,106 @@ def _get_frame_rows(df: pd.DataFrame, frame_number: int) -> tuple[pd.DataFrame, 
     return df[df["frame"] == closest_f], closest_f
 
 
+def team_colors(match_id: str, df: pd.DataFrame | None = None) -> dict[str, str]:
+    if df is None:
+        df = tracking(match_id)
+
+    palette: dict[str, str] = {}
+    if "jersey_color" in df.columns:
+        for team, values in df.groupby("team")["jersey_color"]:
+            if team not in ("home", "away"):
+                continue
+            colors = values.dropna().astype(str)
+            if not colors.empty and re.fullmatch(r"#[0-9a-fA-F]{6}", colors.mode().iloc[0]):
+                palette[str(team)] = colors.mode().iloc[0]
+
+    summary_path = ROOT / "data" / "interim" / f"{match_id}_summary.json"
+    if summary_path.exists():
+        summary = json.loads(summary_path.read_text(encoding="utf-8"))
+        for team, color in summary.get("team_colors", {}).items():
+            if team in ("home", "away") and isinstance(color, str) and re.fullmatch(r"#[0-9a-fA-F]{6}", color):
+                palette.setdefault(team, color)
+
+    palette.setdefault("home", "#c83232")
+    palette.setdefault("away", "#3232c8")
+    if palette["home"].lower() == palette["away"].lower():
+        if palette["home"].lower() == "#3232c8":
+            palette["home"] = "#c83232"
+        else:
+            palette["away"] = "#3232c8"
+    return {"home": palette["home"], "away": palette["away"]}
+
+
+def tracking_quality(match_id: str) -> dict[str, Any]:
+    df = tracking(match_id)
+    if df.empty:
+        return {"status": "unavailable", "message": "No tracking rows are available."}
+
+    import numpy as np
+
+    observed_rows = df
+    if "visible" in df.columns:
+        observed_rows = df[df["visible"].fillna(False).astype(bool)]
+    if observed_rows.empty:
+        return {"status": "unavailable", "message": "No visible tracking rows are available."}
+
+    frames = np.sort(observed_rows["frame"].dropna().unique())
+    if frames.size == 0:
+        return {"status": "unavailable", "message": "No valid frame numbers are available."}
+    frame_step = int(np.median(np.diff(frames))) if frames.size > 1 else 1
+    frame_step = max(frame_step, 1)
+    x = pd.to_numeric(observed_rows["x"], errors="coerce")
+    y = pd.to_numeric(observed_rows["y"], errors="coerce")
+    valid_coordinates = x.between(0, 1) & y.between(0, 1)
+
+    tracks: list[dict[str, Any]] = []
+    gap_lengths: list[int] = []
+    for (team, player_id), rows in observed_rows.groupby(["team", "player_id"]):
+        track_frames = np.sort(rows["frame"].dropna().unique())
+        if track_frames.size == 0:
+            continue
+        expected = max(1, int(round((track_frames[-1] - track_frames[0]) / frame_step)) + 1)
+        observed = int(track_frames.size)
+        gaps = [
+            max(0, int(round((right - left) / frame_step)) - 1)
+            for left, right in zip(track_frames[:-1], track_frames[1:])
+        ]
+        gap_lengths.extend(gap * frame_step for gap in gaps if gap > 0)
+        tracks.append({
+            "team": str(team),
+            "player_id": str(player_id),
+            "observed_frames": observed,
+            "active_frame_coverage": round(min(1.0, observed / expected), 4),
+            "gap_count": sum(gap > 0 for gap in gaps),
+            "longest_gap_frames": max(gaps, default=0) * frame_step,
+        })
+
+    mean_coverage = (
+        float(np.mean([track["active_frame_coverage"] for track in tracks]))
+        if tracks
+        else 0.0
+    )
+    return {
+        "status": "available",
+        "frame_count": int(frames.size),
+        "frame_step": frame_step,
+        "track_count": len(tracks),
+        "observed_rows": int(len(observed_rows)),
+        "coordinate_validity": round(float(valid_coordinates.mean()), 4),
+        "mean_active_frame_coverage": round(mean_coverage, 4),
+        "gap_count": int(sum(track["gap_count"] for track in tracks)),
+        "mean_gap_frames": round(float(np.mean(gap_lengths)), 2) if gap_lengths else 0.0,
+        "tracks": tracks,
+        "definitions": {
+            "active_frame_coverage": (
+                "Observed frames divided by expected sampled frames within that track's first-to-last observed interval."
+            ),
+            "coordinate_validity": "Rows with both normalized pitch coordinates in [0, 1].",
+            "gap_count": "Missing sampled frames between consecutive observations of the same track.",
+        },
+    }
+
+
 def _infer_video_events(match_id: str) -> pd.DataFrame:
     try:
         df = tracking(match_id)
@@ -78,7 +180,7 @@ def _infer_video_events(match_id: str) -> pd.DataFrame:
 
         for f in unique_frames:
             f_rows = df[df["frame"] == f]
-            if len(f_rows) < 4:
+            if len(f_rows) < 4 or f_rows["team"].nunique() < 2:
                 continue
             f_time = float(f / fps)
             graph = build_frame_graph(f_rows, int(f), f_time)
@@ -255,26 +357,30 @@ def frame(match_id: str, frame_number: int) -> dict[str, Any]:
     df = tracking(match_id)
     rows, resolved_f = _get_frame_rows(df, frame_number)
     players = []
+    palette = team_colors(match_id, df)
     for row in rows.itertuples(index=False):
         pid = str(row.player_id)
         if not pid.startswith(f"{str(row.team).upper()}_"):
             pid = f"{str(row.team).upper()}_{pid}"
         conf = getattr(row, "confidence", 1.0)
         conf_val = 1.0 if pd.isna(conf) else float(conf)
-        jersey_color = getattr(row, "jersey_color", None)
+        team = str(row.team)
+        if team not in ("home", "away"):
+            continue
         players.append({
             "player_id": pid,
-            "team": row.team,
+            "team": team,
             "x": None if pd.isna(row.x) else float(row.x),
             "y": None if pd.isna(row.y) else float(row.y),
             "confidence": conf_val,
             "visible": bool(getattr(row, "visible", True)),
-            "jersey_color": None if pd.isna(jersey_color) else str(jersey_color),
+            "jersey_color": palette[team],
         })
     timestamp = float(rows["timestamp"].iloc[0]) if "timestamp" in rows else float(resolved_f / FPS)
     is_video = match_id.startswith("uploaded_") or match_id.startswith("video_")
     return {"match_id": match_id, "frame": resolved_f, "timestamp": timestamp,
             "fps": FPS, "players": players,
+            "team_colors": palette,
             "provenance": {"dataset": "Uploaded Video Perception" if is_video else ("Metrica Sample Game 1" if match_id.endswith("1") else "Metrica Sample Game 2"),
                            "sequence": match_id, "frame_range": str(resolved_f), "fps": FPS}}
 
@@ -294,6 +400,11 @@ def player_trajectory(match_id: str, player_id: str, limit: int = 250) -> list[d
 def possession(match_id: str, frame_number: int) -> dict[str, Any]:
     state = tracking(match_id)
     rows, resolved_f = _get_frame_rows(state, frame_number)
+    if rows["team"].nunique() < 2:
+        return {
+            "status": "unavailable",
+            "message": "Possession cannot be inferred without visible players from both teams.",
+        }
     timestamp = float(rows["timestamp"].iloc[0]) if "timestamp" in rows else float(resolved_f / FPS)
     graph = build_frame_graph(rows, resolved_f, timestamp)
     scores = score_frame(graph)
@@ -305,14 +416,93 @@ def possession(match_id: str, frame_number: int) -> dict[str, Any]:
             "provenance": {"dataset": match_id, "frame_range": str(resolved_f), "method": "ball-free heuristic"}}
 
 
+def possession_timeline(
+    match_id: str,
+    start_frame: int,
+    end_frame: int,
+    stride: int = 25,
+) -> list[dict[str, Any]]:
+    state = tracking(match_id)
+    if state.empty:
+        return []
+
+    window = state[state["frame"].between(start_frame, end_frame)]
+    available = window["frame"].drop_duplicates().sort_values().astype(int).tolist()
+    sampled_frames = available[::stride]
+    if available and sampled_frames[-1] != available[-1]:
+        sampled_frames.append(available[-1])
+
+    timeline = []
+    for frame_number in sampled_frames:
+        rows = window[window["frame"] == frame_number]
+        if rows["team"].nunique() < 2:
+            continue
+        timestamp = (
+            float(rows["timestamp"].iloc[0])
+            if "timestamp" in rows
+            else float(frame_number / FPS)
+        )
+        scores = score_frame(build_frame_graph(rows, frame_number, timestamp))
+        if scores.empty:
+            continue
+        top = scores.iloc[0]
+        timeline.append({
+            "frame": frame_number,
+            "timestamp": timestamp,
+            "team": str(top["team"]),
+            "possessor_id": f"{str(top['team']).upper()}_{top['player_id']}",
+            "score": float(top["raw_score"]),
+        })
+    return timeline
+
+
 def tactical(match_id: str, frame_number: int) -> dict[str, Any]:
     from src.tactics.tactical_features import extract_tactical_features
+    from src.tactics.tactical_score import calculate_tactical_score
+
     state = tracking(match_id)
     rows, resolved_f = _get_frame_rows(state, frame_number)
+    if rows["team"].nunique() < 2:
+        return {
+            "status": "unavailable",
+            "message": "Tactical advantage cannot be determined without visible players from both teams.",
+            "features": {},
+            "tas": None,
+            "provenance": {"dataset": match_id, "frame_range": str(resolved_f)},
+        }
     timestamp = float(rows["timestamp"].iloc[0]) if "timestamp" in rows else float(resolved_f / FPS)
     graph = build_frame_graph(rows, resolved_f, timestamp)
-    return {"status": "available", "features": _clean(extract_tactical_features(graph)),
-            "provenance": {"dataset": match_id, "frame_range": str(resolved_f), "method": "player-only spatial graph"}}
+    scores = score_frame(graph)
+    if scores.empty:
+        return {
+            "status": "unavailable",
+            "message": "No visible players at this frame.",
+            "features": {},
+            "tas": None,
+            "provenance": {"dataset": match_id, "frame_range": str(resolved_f)},
+        }
+
+    top = scores.iloc[0]
+    possessor_id = str(top["player_id"])
+    possessor_team = str(top["team"])
+    features = extract_tactical_features(
+        graph,
+        possessor_id=possessor_id,
+        home_attacks_x1=None,
+    )
+    return {
+        "status": "available",
+        "features": _clean(features),
+        "tas": calculate_tactical_score(features, possessor_team),
+        "possessor_id": f"{possessor_team.upper()}_{possessor_id}",
+        "possessor_team": possessor_team,
+        "provenance": {
+            "dataset": match_id,
+            "frame_range": str(resolved_f),
+            "method": "player-only spatial graph and ball-free possession heuristic",
+            "attack_direction": "unknown; forward-options component excluded from TAS",
+        },
+    }
 
 
 def pass_candidates(match_id: str, frame_number: int, player_id: str) -> list[dict[str, Any]]:
@@ -331,9 +521,17 @@ def pass_ranking(match_id: str, frame_number: int, player_id: str) -> list[dict[
     rows, _ = _get_frame_rows(state, frame_number)
     rows = rows.copy()
     raw_id = player_id.split("_", 1)[-1]
-    ranking = rank_counterfactual_passes(rows, PassProbabilityModel(), raw_id)
+    direction_known = not (match_id.startswith("uploaded_") or match_id.startswith("video_"))
+    ranking = rank_counterfactual_passes(
+        rows,
+        PassProbabilityModel(),
+        raw_id,
+        {"include_forward_progress": direction_known},
+    )
     if ranking.empty:
         return []
+    if not direction_known:
+        ranking["forward_progress"] = None
     ranking.insert(0, "rank", range(1, len(ranking) + 1))
     return _clean(ranking.to_dict(orient="records"))
 
@@ -346,3 +544,10 @@ def result_rows(step: str, filename: str) -> list[dict[str, Any]]:
         value = json.loads(path.read_text(encoding="utf-8"))
         return _clean(value if isinstance(value, list) else [value])
     return _clean(pd.read_csv(path).to_dict(orient="records"))
+
+
+def evaluation_summary() -> dict[str, Any] | None:
+    path = RESULTS / "metrics" / "final_analysis" / "final_statistical_report.json"
+    if not path.exists():
+        return None
+    return _clean(json.loads(path.read_text(encoding="utf-8")))

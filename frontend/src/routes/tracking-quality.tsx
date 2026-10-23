@@ -1,7 +1,11 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { useQuery } from "@tanstack/react-query";
 import { Metric, Panel, PageHeader } from "@/components/Panel";
-import { BarSeries, LineSeries } from "@/components/Charts";
-import { QUALITY_DISTRIBUTION, TRACKING_QUALITY } from "@/lib/data";
+import { BarSeries } from "@/components/Charts";
+import { getTrackingQuality } from "@/api/tracking";
+import { useSession } from "@/lib/session";
+import { useLivePlayers } from "@/hooks/useGameState";
+import { teamDisplayName } from "@/lib/data";
 
 export const Route = createFileRoute("/tracking-quality")({
   head: () => ({
@@ -9,14 +13,7 @@ export const Route = createFileRoute("/tracking-quality")({
       { title: "Tracking Quality — Ball-Free Game State Reconstruction" },
       {
         name: "description",
-        content:
-          "Input data quality audit: missingness, visible player completeness, coordinate validity and jitter distributions.",
-      },
-      { property: "og:title", content: "Tracking Quality — Ball-Free Game State Reconstruction" },
-      {
-        property: "og:description",
-        content:
-          "Missingness, completeness, coordinate validity and jitter for the active dataset.",
+        content: "Measured coverage, coordinate validity and track gaps for the active dataset.",
       },
     ],
   }),
@@ -24,104 +21,111 @@ export const Route = createFileRoute("/tracking-quality")({
 });
 
 function TrackingQuality() {
-  const perPlayer = Array.from({ length: 22 }, (_, i) => ({
-    track: `${i < 11 ? "H" : "A"}${(i % 11) + 1}`,
-    completeness: +(0.99 - ((i * 13) % 17) / 180).toFixed(3),
-    jitter: +(0.12 + ((i * 7) % 19) / 90).toFixed(3),
+  const { matchId, frame, teamNames } = useSession();
+  const quality = useQuery({
+    queryKey: ["tracking-quality", matchId],
+    queryFn: () => getTrackingQuality(matchId),
+  });
+  const live = useLivePlayers(matchId, frame);
+  const players = live.data ?? [];
+  const result = quality.data;
+  const tracks = result?.tracks ?? [];
+  const rows = tracks.map((track) => ({
+    ...track,
+    label: `${teamDisplayName(track.team === "away" ? "away" : "home", players, teamNames)} ${track.player_id}`,
+    coveragePercent: +(track.active_frame_coverage * 100).toFixed(1),
   }));
+  const pct = (value: number | undefined) =>
+    typeof value === "number" ? `${(value * 100).toFixed(1)}%` : "Data not available";
 
-  const timeline = Array.from({ length: 30 }, (_, i) => ({
-    minute: i * 3,
-    missingness: +(0.04 + 0.05 * Math.abs(Math.sin(i / 4))).toFixed(3),
-    validity: +(0.998 - 0.012 * Math.abs(Math.cos(i / 5))).toFixed(3),
-  }));
+  if (quality.isLoading)
+    return (
+      <PageHeader title="Tracking Quality" description="Measuring the active tracking dataset…" />
+    );
+  if (quality.isError || result?.status !== "available")
+    return (
+      <PageHeader
+        title="Tracking Quality"
+        description={result?.message ?? "Tracking quality is unavailable for the selected dataset."}
+      />
+    );
 
   return (
     <>
       <PageHeader
         title="Tracking Quality"
-        description="Quality audit of the input tracking stream. Downstream reconstruction quality is bounded by these figures; every metric elsewhere in the workstation inherits this uncertainty."
+        description={`Measured from ${result.observed_rows} tracking rows across ${result.frame_count} sampled frames. Coverage refers to each track's observed active interval; it is not full-match availability.`}
       />
 
-      <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-6">
+      <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-5">
+        <Metric label="Observed rows" value={String(result.observed_rows)} />
+        <Metric label="Tracked players" value={String(result.track_count)} />
         <Metric
-          label="Missingness Rate"
-          value={`${(TRACKING_QUALITY.missingness * 100).toFixed(1)}%`}
-          tone="warn"
-        />
-        <Metric
-          label="Player Completeness"
-          value={`${(TRACKING_QUALITY.completeness * 100).toFixed(1)}%`}
-        />
-        <Metric
-          label="Coordinate Validity"
-          value={`${(TRACKING_QUALITY.validity * 100).toFixed(1)}%`}
+          label="Coordinate validity"
+          value={pct(result.coordinate_validity)}
           tone="primary"
         />
-        <Metric label="Mean Jitter" value={`${TRACKING_QUALITY.jitter.toFixed(2)} m`} />
-        <Metric label="Track Gaps" value={String(TRACKING_QUALITY.gaps)} sub="Full match" />
+        <Metric label="Mean active coverage" value={pct(result.mean_active_frame_coverage)} />
         <Metric
-          label="Mean Gap Length"
-          value={`${TRACKING_QUALITY.meanGapLen} f`}
-          sub="≈0.30 s at 25 FPS"
+          label="Observed track gaps"
+          value={String(result.gap_count)}
+          sub={`Mean ${result.mean_gap_frames} sampled frames`}
         />
       </div>
 
       <div className="grid gap-4 lg:grid-cols-2">
-        <Panel title="Gap Length Distribution" subtitle="Frames per gap-length bin">
+        <Panel
+          title="Active-interval coverage by track"
+          subtitle="Observed samples / expected samples within each track's active span"
+        >
           <BarSeries
-            data={QUALITY_DISTRIBUTION}
-            xKey="bin"
-            series={[{ key: "frames", label: "Frames", color: "var(--chart-5)" }]}
+            data={rows}
+            xKey="label"
+            series={[{ key: "coveragePercent", label: "Coverage (%)", color: "var(--primary)" }]}
           />
         </Panel>
-        <Panel title="Missingness & Validity Over Time" subtitle="Three-minute buckets">
-          <LineSeries
-            data={timeline}
-            xKey="minute"
-            series={[
-              { key: "missingness", label: "Missingness", color: "var(--away)" },
-              { key: "validity", label: "Validity", color: "var(--primary)" },
-            ]}
+        <Panel
+          title="Observed gaps by track"
+          subtitle={`Missing sampled frames · source sampling step ${result.frame_step}`}
+        >
+          <BarSeries
+            data={rows}
+            xKey="label"
+            series={[{ key: "gap_count", label: "Gap count", color: "var(--chart-5)" }]}
           />
         </Panel>
       </div>
 
-      <Panel title="Per-Track Quality" className="mt-4">
-        <table className="w-full text-[11.5px]">
-          <thead>
-            <tr className="border-b border-border text-left">
-              <th className="label-xs py-1.5">Track</th>
-              <th className="label-xs py-1.5 text-right">Completeness</th>
-              <th className="label-xs py-1.5 text-right">Jitter (m)</th>
-              <th className="label-xs py-1.5">Assessment</th>
-            </tr>
-          </thead>
-          <tbody>
-            {perPlayer.map((t) => (
-              <tr key={t.track} className="border-b border-border/60">
-                <td className="num py-1.5">{t.track}</td>
-                <td className="num py-1.5 text-right">{t.completeness.toFixed(3)}</td>
-                <td className="num py-1.5 text-right">{t.jitter.toFixed(3)}</td>
-                <td
-                  className={`py-1.5 text-[10.5px] uppercase tracking-[0.05em] ${
-                    t.completeness > 0.95 && t.jitter < 0.28
-                      ? "text-primary"
-                      : t.completeness > 0.92
-                        ? "text-warn"
-                        : "text-destructive"
-                  }`}
-                >
-                  {t.completeness > 0.95 && t.jitter < 0.28
-                    ? "usable"
-                    : t.completeness > 0.92
-                      ? "marginal"
-                      : "degraded"}
-                </td>
+      <Panel title="Track-level measurements" className="mt-4">
+        <div className="mb-2 space-y-1 text-[10.5px] text-muted-foreground">
+          {Object.values(result.definitions ?? {}).map((definition) => (
+            <p key={definition}>{definition}</p>
+          ))}
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-[11.5px]">
+            <thead>
+              <tr className="border-b border-border text-left">
+                <th className="label-xs py-1.5">Track</th>
+                <th className="label-xs py-1.5 text-right">Observed frames</th>
+                <th className="label-xs py-1.5 text-right">Active coverage</th>
+                <th className="label-xs py-1.5 text-right">Gap count</th>
+                <th className="label-xs py-1.5 text-right">Longest gap (frames)</th>
               </tr>
-            ))}
-          </tbody>
-        </table>
+            </thead>
+            <tbody>
+              {rows.map((track) => (
+                <tr key={`${track.team}-${track.player_id}`} className="border-b border-border/60">
+                  <td className="py-1.5">{track.label}</td>
+                  <td className="num py-1.5 text-right">{track.observed_frames}</td>
+                  <td className="num py-1.5 text-right">{track.coveragePercent.toFixed(1)}%</td>
+                  <td className="num py-1.5 text-right">{track.gap_count}</td>
+                  <td className="num py-1.5 text-right">{track.longest_gap_frames}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </Panel>
     </>
   );

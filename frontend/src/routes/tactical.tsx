@@ -1,7 +1,14 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { Metric, Panel, PageHeader } from "@/components/Panel";
-import { BarSeries, LineSeries, ScatterSeries } from "@/components/Charts";
-import { localDensity, pressureOn, supportFor, teamGeometry } from "@/lib/data";
+import { BarSeries, ScatterSeries } from "@/components/Charts";
+import {
+  localDensity,
+  pressureOn,
+  supportFor,
+  teamColor,
+  teamDisplayName,
+  teamGeometry,
+} from "@/lib/data";
 import { useLivePlayers, useLiveTactical } from "@/hooks/useGameState";
 import { useSession } from "@/lib/session";
 import { Video, ArrowRight } from "lucide-react";
@@ -26,7 +33,7 @@ export const Route = createFileRoute("/tactical")({
 });
 
 function Tactical() {
-  const { matchId, frame, dataset } = useSession();
+  const { matchId, frame, teamNames } = useSession();
   const livePlayers = useLivePlayers(matchId, frame);
   const tactical = useLiveTactical(matchId, frame);
   const isVideo = matchId.startsWith("uploaded_") || matchId.startsWith("video_");
@@ -45,33 +52,20 @@ function Tactical() {
   const players = livePlayers.data;
   const home = teamGeometry(players, "home");
   const away = teamGeometry(players, "away");
+  const tacticalData = tactical.data as {
+    tas?: number | null;
+    possessor_id?: string;
+    possessor_team?: string;
+  };
 
-  const series = Array.from({ length: 40 }, (_, i) => {
-    const f = isVideo 
-      ? Math.max(0, Math.floor(frame / 20) * 20 - 400 + i * 20)
-      : frame - 780 + i * 20;
-    const h = home;
-    const a = away;
-    return {
-      frame: f,
-      advantage: +(h.compactness - a.compactness).toFixed(3),
-      homeWidth: h.width,
-      awayWidth: a.width,
-      homeLength: h.length,
-      awayLength: a.length,
-    };
-  });
-
-  const perPlayer = players
-    .filter((p) => p.role !== "GK")
-    .map((p) => ({
-      name: `#${p.number}`,
-      team: p.team,
-      pressure: +pressureOn(p, players).toFixed(3),
-      support: +supportFor(p, players).toFixed(3),
-      density: localDensity(p, players),
-      progression: +((p.team === "home" ? p.x : 105 - p.x) / 105).toFixed(3),
-    }));
+  const perPlayer = players.map((p) => ({
+    name: `#${p.number}`,
+    team: p.team,
+    pressure: +pressureOn(p, players).toFixed(3),
+    support: +supportFor(p, players).toFixed(3),
+    density: localDensity(p, players),
+    pitchX: +(p.x / 105).toFixed(3),
+  }));
 
   const homePlayers = perPlayer.filter((p) => p.team === "home");
   const awayPlayers = perPlayer.filter((p) => p.team === "away");
@@ -86,26 +80,34 @@ function Tactical() {
 
       <div className="mb-4 grid grid-cols-2 gap-3 lg:grid-cols-5">
         <Metric
-          label="Tactical Advantage"
-          value={((home.compactness - away.compactness) * 2).toFixed(3)}
-          sub="Home minus away, ±1 scale"
+          label="TAS (current frame)"
+          value={
+            typeof tacticalData.tas === "number"
+              ? tacticalData.tas.toFixed(3)
+              : "Data not available"
+          }
+          sub={
+            tacticalData.possessor_id
+              ? `${tacticalData.possessor_id} · direction-dependent term excluded`
+              : "No inferred possessor"
+          }
           tone="primary"
         />
         <Metric
-          label="Mean Pressure (Home)"
+          label={`Mean Pressure (${teamDisplayName("home", players, teamNames)})`}
           value={avg(homePlayers.map((p) => p.pressure)).toFixed(3)}
         />
         <Metric
-          label="Mean Support (Home)"
+          label={`Mean Support (${teamDisplayName("home", players, teamNames)})`}
           value={avg(homePlayers.map((p) => p.support)).toFixed(3)}
         />
         <Metric
-          label="Home Compactness"
+          label={`${teamDisplayName("home", players, teamNames)} Compactness`}
           value={home.compactness.toFixed(3)}
           sub={`Spread ${home.spread} m`}
         />
         <Metric
-          label="Away Compactness"
+          label={`${teamDisplayName("away", players, teamNames)} Compactness`}
           value={away.compactness.toFixed(3)}
           sub={`Spread ${away.spread} m`}
         />
@@ -113,51 +115,75 @@ function Tactical() {
 
       <div className="grid gap-4 lg:grid-cols-2">
         <Panel
-          title="Tactical Advantage"
-          subtitle="Rolling window, ±800 frames around current position"
+          title="Current-frame team compactness"
+          subtitle={`Frame ${frame} snapshot · not a historical TAS curve`}
         >
-          <LineSeries
-            data={series}
-            xKey="frame"
-            series={[{ key: "advantage", label: "Advantage (home−away)", color: "var(--primary)" }]}
-          />
-        </Panel>
-
-        <Panel title="Team Width & Length" subtitle="Metres, outfield players">
-          <LineSeries
-            data={series}
-            xKey="frame"
+          <BarSeries
+            data={[{ metric: "Compactness", home: home.compactness, away: away.compactness }]}
+            xKey="metric"
             series={[
-              { key: "homeWidth", label: "Home width", color: "var(--home)" },
-              { key: "awayWidth", label: "Away width", color: "var(--away)" },
-              { key: "homeLength", label: "Home length", color: "rgba(255,255,255,0.4)" },
+              {
+                key: "home",
+                label: teamDisplayName("home", players, teamNames),
+                color: teamColor(players, "home"),
+              },
+              {
+                key: "away",
+                label: teamDisplayName("away", players, teamNames),
+                color: teamColor(players, "away"),
+              },
             ]}
           />
         </Panel>
 
-        <Panel title="Pressure vs Space" subtitle="Per outfield player at the current frame">
+        <Panel title="Team Width & Length" subtitle={`Frame ${frame} · metres, visible players`}>
+          <BarSeries
+            data={[
+              { metric: "Width", home: home.width, away: away.width },
+              { metric: "Length", home: home.length, away: away.length },
+            ]}
+            xKey="metric"
+            series={[
+              {
+                key: "home",
+                label: teamDisplayName("home", players, teamNames),
+                color: teamColor(players, "home"),
+              },
+              {
+                key: "away",
+                label: teamDisplayName("away", players, teamNames),
+                color: teamColor(players, "away"),
+              },
+            ]}
+          />
+        </Panel>
+
+        <Panel title="Pressure vs Space" subtitle="Visible tracked players at the current frame">
           <ScatterSeries
             data={homePlayers.map((p) => ({ ...p, space: +(1 - p.pressure).toFixed(3) }))}
             xKey="pressure"
             yKey="space"
             xLabel="Pressure index"
             yLabel="Space"
-            color="var(--home)"
+            color={teamColor(players, "home")}
           />
         </Panel>
 
-        <Panel title="Support vs Forward Progression" subtitle="Home players">
+        <Panel
+          title="Support vs Pitch Position"
+          subtitle={`${teamDisplayName("home", players, teamNames)} players · attack direction is not assumed`}
+        >
           <ScatterSeries
             data={homePlayers}
-            xKey="progression"
+            xKey="pitchX"
             yKey="support"
-            xLabel="Forward progression (normalised x)"
+            xLabel="Pitch X (normalised)"
             yLabel="Support index"
             color="var(--primary)"
           />
         </Panel>
 
-        <Panel title="Local Density" subtitle="Players within 10 m, per outfield player">
+        <Panel title="Local Density" subtitle="Visible tracked players within 10 m">
           <BarSeries
             data={perPlayer}
             xKey="name"
@@ -179,8 +205,16 @@ function Tactical() {
             ]}
             xKey="metric"
             series={[
-              { key: "home", label: "Home", color: "var(--home)" },
-              { key: "away", label: "Away", color: "var(--away)" },
+              {
+                key: "home",
+                label: teamDisplayName("home", players, teamNames),
+                color: teamColor(players, "home"),
+              },
+              {
+                key: "away",
+                label: teamDisplayName("away", players, teamNames),
+                color: teamColor(players, "away"),
+              },
             ]}
           />
         </Panel>
@@ -188,7 +222,7 @@ function Tactical() {
 
       <Panel
         title="Per-Player Tactical Table"
-        subtitle="Away side shown for comparison"
+        subtitle="All visible tracked players; goalkeeper roles are not available"
         className="mt-4"
       >
         <table className="w-full text-[11.5px]">
@@ -199,20 +233,20 @@ function Tactical() {
               <th className="label-xs py-1.5 text-right">Pressure</th>
               <th className="label-xs py-1.5 text-right">Support</th>
               <th className="label-xs py-1.5 text-right">Density</th>
-              <th className="label-xs py-1.5 text-right">Progression</th>
+              <th className="label-xs py-1.5 text-right">Pitch X</th>
             </tr>
           </thead>
           <tbody>
             {[...homePlayers, ...awayPlayers].map((p, i) => (
               <tr key={`${p.team}-${p.name}-${i}`} className="border-b border-border/60">
                 <td className="num py-1.5">{p.name}</td>
-                <td className={`py-1.5 ${p.team === "home" ? "text-home" : "text-away"}`}>
-                  {p.team === "home" ? "Home" : "Away"}
+                <td className="py-1.5" style={{ color: teamColor(players, p.team) }}>
+                  {teamDisplayName(p.team, players, teamNames)}
                 </td>
                 <td className="num py-1.5 text-right">{p.pressure.toFixed(3)}</td>
                 <td className="num py-1.5 text-right">{p.support.toFixed(3)}</td>
                 <td className="num py-1.5 text-right">{p.density}</td>
-                <td className="num py-1.5 text-right">{p.progression.toFixed(3)}</td>
+                <td className="num py-1.5 text-right">{p.pitchX.toFixed(3)}</td>
               </tr>
             ))}
           </tbody>

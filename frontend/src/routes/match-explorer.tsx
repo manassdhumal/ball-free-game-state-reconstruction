@@ -1,21 +1,12 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Pause, Play, SkipBack, SkipForward, Video, ArrowRight, Activity } from "lucide-react";
+import { Pause, Play, SkipBack, SkipForward, Video, ArrowRight } from "lucide-react";
 import { Panel, PageHeader } from "@/components/Panel";
 import { Pitch, PitchLegend } from "@/components/Pitch";
-import {
-  buildFrame,
-  DATASETS,
-  dist,
-  EVENTS,
-  localDensity,
-  nearest,
-  POSSESSION_SEGMENTS,
-  pressureOn,
-  supportFor,
-} from "@/lib/data";
+import { DATASETS, dist, localDensity, nearest, pressureOn, supportFor } from "@/lib/data";
 import { useSession } from "@/lib/session";
+import { teamDisplayName } from "@/lib/data";
 import { useLivePlayers } from "@/hooks/useGameState";
 import { getMatches } from "@/api/matches";
 import { getEvents } from "@/api/events";
@@ -48,10 +39,10 @@ function MatchExplorer() {
     setMatchId,
     frame,
     setFrame,
-    dataset,
     setDataset,
     selectedPlayer,
     setSelectedPlayer,
+    teamNames,
   } = useSession();
   const [playing, setPlaying] = useState(false);
   const [speed, setSpeed] = useState(1);
@@ -62,8 +53,8 @@ function MatchExplorer() {
   const availableMatches =
     matchesQuery.data?.data && matchesQuery.data.data.length > 0
       ? matchesQuery.data.data
-      : DATASETS.map((d) => ({
-          match_id: d.id === 1 ? "metrica_game1" : "metrica_game2",
+      : DATASETS.slice(0, 2).map((d, index) => ({
+          match_id: index === 0 ? "metrica_game1" : "metrica_game2",
           label: d.label,
           fps: 25,
           frame_count: 1500,
@@ -84,67 +75,30 @@ function MatchExplorer() {
     staleTime: 30_000,
   });
 
-  const rawEvents = (eventsQuery.data?.data as Array<Record<string, any>> | undefined) ?? [];
+  const rawEvents = eventsQuery.data?.data;
 
-  const videoEvents = useMemo(() => {
-    if (!isVideo || rawEvents.length === 0) return [];
-    return rawEvents
-      .map((e, idx) => ({
-        frame: Number(e.frame ?? e.start_frame ?? 0),
-        type: String(e.type ?? e.event_type ?? "EVENT"),
-        team: String(e.team ?? "home").toLowerCase(),
-        player_id: String(e.player_id ?? ""),
-        timestamp: Number(e.timestamp ?? e.start_timestamp ?? 0),
+  const matchEvents = useMemo(() => {
+    return (rawEvents ?? [])
+      .map((event) => ({
+        frame: Number(event.frame ?? event.start_frame),
+        type: String(event.type ?? event.event_type ?? "EVENT"),
+        team: String(event.team ?? "unknown").toLowerCase(),
+        timestamp: Number(event.timestamp ?? event.start_timestamp ?? 0),
       }))
+      .filter((event) => Number.isFinite(event.frame) && event.frame >= 0)
       .sort((a, b) => a.frame - b.frame);
-  }, [isVideo, rawEvents]);
+  }, [rawEvents]);
 
   const activeEvents = useMemo(() => {
-    if (isVideo) {
-      return videoEvents.map((e) => ({
-        frame: e.frame,
-        annotated: e.type,
-        predicted: e.type,
-        team: e.team,
+    return matchEvents
+      .filter((event) => event.frame >= windowStart && event.frame <= windowEnd)
+      .map((event) => ({
+        frame: event.frame,
+        annotated: event.type,
+        predicted: event.type,
+        team: event.team,
       }));
-    }
-    return EVENTS;
-  }, [isVideo, videoEvents]);
-
-  const activePossessionSegments = useMemo(() => {
-    if (!isVideo) {
-      return POSSESSION_SEGMENTS.filter((s) => s.end > windowStart && s.start < windowEnd);
-    }
-    if (videoEvents.length === 0) {
-      return [{ start: 0, end: windowEnd, team: "home" as const, confidence: 0.85 }];
-    }
-    const segs: Array<{ start: number; end: number; team: "home" | "away" | "uncontested"; confidence: number }> = [];
-    let curStart = 0;
-    let curTeam: "home" | "away" = videoEvents[0].team === "away" ? "away" : "home";
-
-    for (let i = 0; i < videoEvents.length; i++) {
-      const ev = videoEvents[i];
-      if (ev.team !== curTeam && ev.frame > curStart) {
-        segs.push({
-          start: curStart,
-          end: ev.frame,
-          team: curTeam,
-          confidence: 0.88,
-        });
-        curStart = ev.frame;
-        curTeam = ev.team === "away" ? "away" : "home";
-      }
-    }
-    if (curStart < windowEnd) {
-      segs.push({
-        start: curStart,
-        end: windowEnd,
-        team: curTeam,
-        confidence: 0.88,
-      });
-    }
-    return segs;
-  }, [isVideo, videoEvents, windowStart, windowEnd]);
+  }, [matchEvents, windowStart, windowEnd]);
 
   useEffect(() => {
     if (!playing) return;
@@ -162,7 +116,7 @@ function MatchExplorer() {
     <>
       <PageHeader
         title="Match Explorer"
-        description="Inspect the raw player-only tracking stream frame by frame. Possession bands are inferred, not annotated — see Possession & Events for evaluation against ground truth."
+        description="Inspect the full-pitch player tracking frame by frame. Markers use sequence event annotations; possession timelines are not fabricated from sparse events."
       />
 
       {/* Reconstructed Video Match Indicator Banner */}
@@ -171,7 +125,8 @@ function MatchExplorer() {
           <div className="flex items-center gap-2 text-emerald-400">
             <Video className="h-4 w-4 shrink-0" />
             <span>
-              <strong>Perception Video Active:</strong> {currentMatch?.label || matchId} ({maxMatchFrames} frames reconstructed)
+              <strong>Perception Video Active:</strong> {currentMatch?.label || matchId} (
+              {maxMatchFrames} frames reconstructed)
             </span>
           </div>
           <Link
@@ -191,7 +146,9 @@ function MatchExplorer() {
             onChange={(e) => {
               const selected = availableMatches.find((m) => m.match_id === e.target.value);
               if (selected) {
-                const isNewVideo = selected.match_id.startsWith("uploaded_") || selected.match_id.startsWith("video_");
+                const isNewVideo =
+                  selected.match_id.startsWith("uploaded_") ||
+                  selected.match_id.startsWith("video_");
                 setMatchId(selected.match_id);
                 setDataset(selected.label);
                 setFrame(isNewVideo ? 0 : 1250);
@@ -275,37 +232,19 @@ function MatchExplorer() {
               <Pitch players={players} selectedId={sel.id} onSelect={setSelectedPlayer} />
             )}
             <div className="mt-2">
-              <PitchLegend />
+              <PitchLegend players={players} />
             </div>
           </Panel>
 
           <Panel
             title="Timeline"
             subtitle={
-              isVideo 
+              isVideo
                 ? `Frames ${windowStart}–${windowEnd} · Inferred possession & tactical event markers for ${currentMatch?.label || matchId}`
-                : "Frames 1000–1500 · inferred possession bands and event markers"
+                : `Frames ${windowStart}–${windowEnd} · markers use annotated event frames`
             }
           >
             <div className="relative h-7 w-full border border-border bg-panel-alt">
-              {activePossessionSegments.map((s, idx) => (
-                <div
-                  key={`${s.start}-${idx}`}
-                  className="absolute top-0 h-full"
-                  style={{
-                    left: `${Math.max(0, pct(s.start))}%`,
-                    width: `${Math.min(100, pct(s.end)) - Math.max(0, pct(s.start))}%`,
-                    background:
-                      s.team === "home"
-                        ? "var(--home)"
-                        : s.team === "away"
-                          ? "var(--away)"
-                          : "var(--muted)",
-                    opacity: 0.55,
-                  }}
-                  title={`${s.team} · confidence ${s.confidence}`}
-                />
-              ))}
               <div
                 className="absolute top-0 h-full w-px bg-primary"
                 style={{ left: `${Math.min(100, Math.max(0, pct(frame)))}%` }}
@@ -338,7 +277,7 @@ function MatchExplorer() {
             <>
               <dl className="text-[12px]">
                 {[
-                  ["Team", sel.team === "home" ? "Home" : "Away"],
+                  ["Team", teamDisplayName(sel.team, players, teamNames)],
                   ["Track ID", sel.id],
                   ["Position (x, y)", `${sel.x.toFixed(2)}, ${sel.y.toFixed(2)} m`],
                   ["Speed", `${Math.hypot(sel.vx, sel.vy).toFixed(2)} m/s`],

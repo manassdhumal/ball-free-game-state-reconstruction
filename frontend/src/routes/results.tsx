@@ -1,6 +1,7 @@
 import { createFileRoute } from "@tanstack/react-router";
+import { useQuery } from "@tanstack/react-query";
 import { Panel, PageHeader } from "@/components/Panel";
-import { BarSeries } from "@/components/Charts";
+import { getEvaluationSummary } from "@/api/evaluation";
 
 export const Route = createFileRoute("/results")({
   head: () => ({
@@ -8,133 +9,108 @@ export const Route = createFileRoute("/results")({
       { title: "Research Results — Ball-Free Game State Reconstruction" },
       {
         name: "description",
-        content:
-          "Benchmarks, method comparisons and honest negative findings for player-only game state reconstruction.",
+        content: "Aggregate metrics and confidence intervals from verified evaluation artifacts.",
       },
-      { property: "og:title", content: "Research Results — Ball-Free Game State Reconstruction" },
-      { property: "og:description", content: "Method comparisons and negative findings." },
     ],
   }),
   component: Results,
 });
 
-const METHODS = [
-  {
-    method: "Nearest-player heuristic (baseline)",
-    poss: 0.612,
-    event: 0.481,
-    mrr: 0.402,
-    note: "No learning; surprisingly strong on possession.",
-  },
-  {
-    method: "Voronoi control baseline",
-    poss: 0.658,
-    event: 0.502,
-    mrr: 0.437,
-    note: "Better in open play, worse in crowded areas.",
-  },
-  {
-    method: "Geometric posterior (ours)",
-    poss: 0.741,
-    event: 0.612,
-    mrr: 0.583,
-    note: "Reference configuration.",
-  },
-  {
-    method: "Geometric posterior + Kalman",
-    poss: 0.706,
-    event: 0.571,
-    mrr: 0.512,
-    note: "Only beneficial on degraded input.",
-  },
-  {
-    method: "Ball-informed upper bound",
-    poss: 0.918,
-    event: 0.847,
-    mrr: 0.771,
-    note: "Uses ball position; not comparable, shown as ceiling.",
-  },
-];
-
 function Results() {
+  const report = useQuery({
+    queryKey: ["evaluation-summary"],
+    queryFn: getEvaluationSummary,
+  });
+  const summary = report.data?.data;
+  const conditions = summary?.summary_by_condition;
+
   return (
     <>
       <PageHeader
         title="Research Results"
-        description="Aggregated results across the evaluation suite, including comparisons against simple baselines and a ball-informed ceiling that this work does not attempt to reach."
+        description="Aggregate evaluation results loaded from the committed statistical report. These are offline benchmark measurements, not live-match predictions."
       />
+      {report.isLoading ? (
+        <Panel title="Evaluation report">Loading verified evaluation artifacts…</Panel>
+      ) : report.isError || !summary || !conditions ? (
+        <Panel title="Evaluation unavailable">
+          {report.data?.availability.message ??
+            "No verified aggregate report is available. No substitute or projected scores are shown."}
+        </Panel>
+      ) : (
+        <>
+          <Panel
+            title="Condition-level outcomes"
+            subtitle={`${summary.n_runs} paired runs · ${summary.n_conditions} condition measurements · 95% confidence intervals`}
+          >
+            <div className="overflow-x-auto">
+              <table className="w-full text-[11.5px]">
+                <thead>
+                  <tr className="border-b border-border text-left">
+                    <th className="label-xs py-1.5">Condition</th>
+                    <th className="label-xs py-1.5 text-right">Runs</th>
+                    <th className="label-xs py-1.5 text-right">Possession F1 (95% CI)</th>
+                    <th className="label-xs py-1.5 text-right">Tactical MAE (95% CI)</th>
+                    <th className="label-xs py-1.5 text-right">Tracking missingness</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {Object.entries(conditions).map(([condition, metrics]) => (
+                    <tr key={condition} className="border-b border-border/60">
+                      <td className="py-1.5">{condition.replaceAll("-", " ")}</td>
+                      <td className="num py-1.5 text-right">{metrics.possession.count}</td>
+                      <td className="num py-1.5 text-right">
+                        {metrics.possession.mean.toFixed(3)} [
+                        {metrics.possession.ci95_mean_lo.toFixed(3)}–
+                        {metrics.possession.ci95_mean_hi.toFixed(3)}]
+                      </td>
+                      <td className="num py-1.5 text-right">
+                        {metrics.tactical.mean.toFixed(3)} [
+                        {metrics.tactical.ci95_mean_lo.toFixed(3)}–
+                        {metrics.tactical.ci95_mean_hi.toFixed(3)}]
+                      </td>
+                      <td className="num py-1.5 text-right">
+                        {(metrics.tracking.mean * 100).toFixed(1)}%
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          </Panel>
 
-      <Panel title="Method Comparison" className="mb-4">
-        <table className="w-full text-[11.5px]">
-          <thead>
-            <tr className="border-b border-border text-left">
-              <th className="label-xs py-1.5">Method</th>
-              <th className="label-xs py-1.5 text-right">Possession F1</th>
-              <th className="label-xs py-1.5 text-right">Event F1</th>
-              <th className="label-xs py-1.5 text-right">Ranking MRR</th>
-              <th className="label-xs py-1.5">Note</th>
-            </tr>
-          </thead>
-          <tbody>
-            {METHODS.map((m) => (
-              <tr key={m.method} className="border-b border-border/60">
-                <td className="py-1.5">{m.method}</td>
-                <td className="num py-1.5 text-right">{m.poss.toFixed(3)}</td>
-                <td className="num py-1.5 text-right">{m.event.toFixed(3)}</td>
-                <td className="num py-1.5 text-right">{m.mrr.toFixed(3)}</td>
-                <td className="py-1.5 text-muted-foreground">{m.note}</td>
-              </tr>
-            ))}
-          </tbody>
-        </table>
-      </Panel>
+          <div className="mt-4 grid gap-4 md:grid-cols-2">
+            <Panel title="Possession recovery">
+              <p className="num text-xl">
+                +{summary.possession_recovery.abs_improvement.toFixed(3)} F1
+              </p>
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                Paired mean change over {summary.possession_recovery.n} runs; recovered{" "}
+                {(summary.possession_recovery.recovery_fraction * 100).toFixed(1)}% of the
+                synthetic-degradation loss.
+              </p>
+            </Panel>
+            <Panel title="Tactical score recovery">
+              <p className="num text-xl">
+                {summary.tactical_recovery.abs_improvement.toFixed(3)} lower MAE
+              </p>
+              <p className="mt-1 text-[11px] text-muted-foreground">
+                Paired mean change over {summary.tactical_recovery.n} runs. Lower error indicates
+                closer agreement with the clean-reference scores.
+              </p>
+            </Panel>
+          </div>
 
-      <Panel title="Benchmark Summary" className="mb-4">
-        <BarSeries
-          data={METHODS.map((m) => ({
-            method: m.method.split(" ")[0]!,
-            poss: m.poss,
-            event: m.event,
-            mrr: m.mrr,
-          }))}
-          xKey="method"
-          series={[
-            { key: "poss", label: "Possession F1", color: "var(--primary)" },
-            { key: "event", label: "Event F1", color: "var(--home)" },
-            { key: "mrr", label: "Ranking MRR", color: "var(--chart-5)" },
-          ]}
-          height={250}
-        />
-      </Panel>
-
-      <Panel
-        title="Negative and Inconclusive Findings"
-        subtitle="Reported in full; not filtered for favourable outcomes"
-      >
-        <ul className="list-disc space-y-2 pl-4 text-[11.5px] leading-relaxed text-muted-foreground">
-          <li>
-            The nearest-player heuristic reaches 0.612 possession F1 — 83% of our method's score —
-            so most of the gain comes from a small number of contested frames, not from general
-            modelling.
-          </li>
-          <li>
-            Duel detection (F1 0.366) is no better than chance-adjusted marking detection. We do not
-            claim duel recognition is feasible without ball information.
-          </li>
-          <li>
-            Kalman filtering <em>reduces</em> accuracy on clean input (0.741 → 0.706). It is only a
-            mitigation for degraded tracking, not a general improvement.
-          </li>
-          <li>
-            Counterfactual ranking has no ground truth. MRR is computed against annotated actual
-            passes, which measures agreement with observed choices, not decision quality.
-          </li>
-          <li>
-            Results on Synthetic_Controlled_A do not transfer cleanly to Metrica data; the
-            fragmentation sweep shows a 0.04–0.07 F1 gap that we cannot currently explain.
-          </li>
-        </ul>
-      </Panel>
+          <Panel title="How to interpret" className="mt-4">
+            <p className="text-[11.5px] leading-relaxed text-muted-foreground">
+              These metrics use annotated reference data and controlled synthetic degradation. They
+              do not establish accuracy on a newly uploaded clip. Possession F1 and tactical score
+              error are separate outcomes; no ball-inferred or hypothetical decision result is
+              presented as a completed action.
+            </p>
+          </Panel>
+        </>
+      )}
     </>
   );
 }

@@ -10,6 +10,9 @@ import {
   Sparkles,
   Zap,
 } from "lucide-react";
+import { useSession } from "@/lib/session";
+import { useLivePlayers } from "@/hooks/useGameState";
+import { teamColor, teamDisplayName, type Team } from "@/lib/data";
 
 const NAV: Array<{
   group: string;
@@ -17,9 +20,7 @@ const NAV: Array<{
 }> = [
   {
     group: "Perception Studio",
-    items: [
-      { to: "/broadcast", label: "Video Studio", icon: Radio, badge: "AI Studio" },
-    ],
+    items: [{ to: "/broadcast", label: "Video Studio", icon: Radio, badge: "AI Studio" }],
   },
   {
     group: "Tactical Intelligence",
@@ -34,11 +35,18 @@ const NAV: Array<{
 ];
 
 export function Sidebar() {
+  const { matchId, frame, teamNames, setTeamName } = useSession();
+  const { data: players = [] } = useLivePlayers(matchId, frame);
+
   return (
     <aside className="flex w-64 shrink-0 flex-col border-r border-border bg-panel-alt">
       {/* Brand Header */}
       <div className="border-b border-border px-4 py-3.5 flex items-center justify-between">
-        <Link to="/" className="group flex items-center gap-2.5 cursor-pointer" title="Go to Product Landing Page">
+        <Link
+          to="/"
+          className="group flex items-center gap-2.5 cursor-pointer"
+          title="Go to Product Landing Page"
+        >
           <div className="h-7 w-7 rounded-md bg-emerald-500/20 border border-emerald-500/40 flex items-center justify-center text-emerald-400 group-hover:border-emerald-300 transition-colors">
             <Zap className="h-4 w-4" />
           </div>
@@ -72,13 +80,17 @@ export function Sidebar() {
                   key={item.to}
                   to={item.to}
                   activeProps={{
-                    className: "bg-accent text-foreground border-l-2 border-l-primary pl-[10px] font-medium",
+                    className:
+                      "bg-accent text-foreground border-l-2 border-l-primary pl-[10px] font-medium",
                   }}
                   inactiveProps={{ className: "text-muted-foreground hover:bg-muted/60" }}
                   className="flex items-center justify-between rounded-sm px-3 py-1.5 text-[12px] transition-colors"
                 >
                   <div className="flex items-center gap-2 truncate">
-                    <item.icon className="h-3.5 w-3.5 shrink-0 text-muted-foreground" strokeWidth={1.8} />
+                    <item.icon
+                      className="h-3.5 w-3.5 shrink-0 text-muted-foreground"
+                      strokeWidth={1.8}
+                    />
                     <span className="truncate">{item.label}</span>
                   </div>
                   {item.badge && (
@@ -91,6 +103,30 @@ export function Sidebar() {
             </div>
           </div>
         ))}
+        <section className="px-2.5">
+          <div className="label-xs pb-2 text-[9.5px] font-semibold text-muted-foreground/80">
+            Team names
+          </div>
+          {(["home", "away"] as Team[]).map((team) => (
+            <label key={team} className="mb-2 flex items-center gap-2">
+              <i
+                className="h-2.5 w-2.5 shrink-0 rounded-full"
+                style={{ backgroundColor: teamColor(players, team) }}
+              />
+              <input
+                aria-label={`${teamDisplayName(team, players, teamNames)} team name`}
+                className="min-w-0 flex-1 rounded-sm border border-border bg-background px-2 py-1 text-[11px] text-foreground"
+                maxLength={40}
+                placeholder={teamDisplayName(team, players, teamNames)}
+                value={teamNames[team]}
+                onChange={(event) => setTeamName(team, event.target.value)}
+              />
+            </label>
+          ))}
+          <p className="text-[9px] leading-relaxed text-muted-foreground">
+            Names are shared across all analysis pages.
+          </p>
+        </section>
       </nav>
 
       {/* Product Footer */}

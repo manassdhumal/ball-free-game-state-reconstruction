@@ -49,7 +49,11 @@ def calculate_tactical_score(features: Dict[str, Any], possessor_team: str) -> f
     
     # 3. Penetration / Options:
     # Cap forward options at 4 players
-    score_options = np.clip(forward_options / 4.0, 0.0, 1.0)
+    score_options = (
+        np.clip(forward_options / 4.0, 0.0, 1.0)
+        if pd.notna(forward_options)
+        else None
+    )
     
     # 4. Defensive Disorganization:
     # High compactness (small area) -> bad. Low compactness (large area) -> good.
@@ -63,12 +67,15 @@ def calculate_tactical_score(features: Dict[str, Any], possessor_team: str) -> f
     w_support = 0.15
     w_defense = 0.15
     
-    tas = (
-        w_pressure * score_pressure +
-        w_options * score_options +
-        w_support * score_support +
-        w_defense * score_defense_spread
-    )
+    components = [
+        (w_pressure, score_pressure),
+        (w_support, score_support),
+        (w_defense, score_defense_spread),
+    ]
+    if score_options is not None:
+        components.append((w_options, score_options))
+    weight_total = sum(weight for weight, _score in components)
+    tas = sum(weight * score for weight, score in components) / weight_total
     
     return float(np.clip(tas, 0.0, 1.0))
 

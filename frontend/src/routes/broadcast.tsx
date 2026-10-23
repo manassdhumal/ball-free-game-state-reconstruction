@@ -1,17 +1,17 @@
 import { useState, useRef, useEffect } from "react";
 import { createFileRoute, useNavigate, Link } from "@tanstack/react-router";
-import { 
-  UploadCloud, 
-  Play, 
-  Pause, 
-  CheckCircle2, 
-  AlertCircle, 
-  Sliders, 
-  Video, 
-  ArrowRight, 
-  Layers, 
-  Activity, 
-  ShieldCheck, 
+import {
+  UploadCloud,
+  Play,
+  Pause,
+  CheckCircle2,
+  AlertCircle,
+  Sliders,
+  Video,
+  ArrowRight,
+  Layers,
+  Activity,
+  ShieldCheck,
   RefreshCw,
   Sparkles,
   Zap,
@@ -27,27 +27,27 @@ import {
   Compass,
   Trash2,
   Check,
-  HardDrive
+  HardDrive,
 } from "lucide-react";
 import { useQuery } from "@tanstack/react-query";
 import { Panel, PageHeader } from "@/components/Panel";
 import { Pitch } from "@/components/Pitch";
 import { getGsrStatus } from "@/api/gsr";
-import { 
-  uploadVideoFile, 
-  processVideo, 
-  getVideoStatus, 
-  getVideoStreamUrl, 
+import {
+  uploadVideoFile,
+  processVideo,
+  getVideoStatus,
+  getVideoStreamUrl,
   runSampleDemo,
   getStoredVideos,
   getStoredVideoResult,
   deleteStoredVideo,
   type VideoProcessResponse,
   type VideoUploadResponse,
-  type StoredVideo
+  type StoredVideo,
 } from "@/api/video";
 import { apiFetch } from "@/api/client";
-import type { Player } from "@/lib/data";
+import { DEFAULT_TEAM_COLORS, teamColor, teamDisplayName, type Player } from "@/lib/data";
 import { useSession } from "@/lib/session";
 
 export const Route = createFileRoute("/broadcast")({
@@ -66,8 +66,12 @@ export const Route = createFileRoute("/broadcast")({
 
 function VideoReconstructionStudio() {
   const navigate = useNavigate();
-  const { setMatchId, setDataset, setFrame } = useSession();
-  const statusQuery = useQuery({ queryKey: ["gsr-status"], queryFn: getGsrStatus, staleTime: 30_000 });
+  const { setMatchId, setDataset, setFrame, teamNames } = useSession();
+  const statusQuery = useQuery({
+    queryKey: ["gsr-status"],
+    queryFn: getGsrStatus,
+    staleTime: 30_000,
+  });
   const storedVideosQuery = useQuery({
     queryKey: ["stored-videos"],
     queryFn: getStoredVideos,
@@ -89,8 +93,8 @@ function VideoReconstructionStudio() {
 
   // Configuration options (Enforced optimal AI perception settings)
   const preset = "auto_detect";
-  const frameStride = 1;       // Optimal: 100% frame analysis fidelity for butter-smooth trajectories
-  const confThreshold = 0.08;  // Optimal: high recall capturing all 22 outfield players and goalkeepers
+  const frameStride = 1; // Optimal: 100% frame analysis fidelity for butter-smooth trajectories
+  const confThreshold = 0.08; // Optimal: high recall capturing all 22 outfield players and goalkeepers
   const applyMitigation = true;
 
   // Segment & Time Crop options (Supports custom intervals e.g. Minute 2-3)
@@ -117,7 +121,8 @@ function VideoReconstructionStudio() {
 
   // Effective video parameters
   const fps = analysisResult?.data?.fps || videoMeta?.fps || 25.0;
-  const maxProcessedFrame = analysisResult?.data?.max_frame ?? 
+  const maxProcessedFrame =
+    analysisResult?.data?.max_frame ??
     (analysisResult?.data?.frame_count ? analysisResult.data.frame_count - 1 : 0);
 
   const storedVideos = storedVideosQuery.data?.videos || [];
@@ -249,9 +254,15 @@ function VideoReconstructionStudio() {
         }, 800);
       });
 
-      if (!demoResult?.data || (demoResult as any).status === "error" || demoResult.data?.status === "error") {
+      if (
+        !demoResult?.data ||
+        (demoResult as any).status === "error" ||
+        demoResult.data?.status === "error"
+      ) {
         setIsProcessing(false);
-        setErrorMsg((demoResult as any)?.message || demoResult?.data?.message || "Failed to run sample demo.");
+        setErrorMsg(
+          (demoResult as any)?.message || demoResult?.data?.message || "Failed to run sample demo.",
+        );
         return;
       }
 
@@ -397,10 +408,16 @@ function VideoReconstructionStudio() {
         }, 800);
       });
 
-      if (!resultData?.data || (resultData as any).status === "error" || resultData.data?.status === "error") {
+      if (
+        !resultData?.data ||
+        (resultData as any).status === "error" ||
+        resultData.data?.status === "error"
+      ) {
         setIsUploading(false);
         setIsProcessing(false);
-        setErrorMsg((resultData as any)?.message || resultData?.data?.message || "Failed to process video.");
+        setErrorMsg(
+          (resultData as any)?.message || resultData?.data?.message || "Failed to process video.",
+        );
         return;
       }
 
@@ -431,18 +448,35 @@ function VideoReconstructionStudio() {
 
   // Pre-fetch all tracking frames for instantaneous zero-latency playback
   useEffect(() => {
-    if (!analysisResult?.data || (analysisResult as any).status === "error" || analysisResult.data.status === "error") return;
+    if (
+      !analysisResult?.data ||
+      (analysisResult as any).status === "error" ||
+      analysisResult.data.status === "error"
+    )
+      return;
     const matchId = analysisResult.match_id;
     const effectiveFps = fps / Math.max(1, analysisResult.data?.frame_stride ?? 1);
 
-    apiFetch<{ frames: Record<string, Array<{ player_id: string; team: string; x: number | null; y: number | null; jersey_color?: string | null }>> }>(
-      `/game-state/${matchId}/all`
-    )
+    apiFetch<{
+      frames: Record<
+        string,
+        Array<{
+          player_id: string;
+          team: string;
+          x: number | null;
+          y: number | null;
+          jersey_color?: string | null;
+        }>
+      >;
+      team_colors?: { home: string; away: string };
+    }>(`/game-state/${matchId}/all`)
       .then((res) => {
         if (res.frames) {
           const cache: Record<number, Player[]> = {};
-          const sortedFrames = Object.keys(res.frames).map(Number).sort((a, b) => a - b);
-          
+          const sortedFrames = Object.keys(res.frames)
+            .map(Number)
+            .sort((a, b) => a - b);
+
           for (const fNum of sortedFrames) {
             const players = res.frames[fNum] || [];
             const nextFramePlayers = res.frames[fNum + 1] || [];
@@ -451,8 +485,9 @@ function VideoReconstructionStudio() {
             cache[fNum] = players
               .filter((p) => p.x !== null && p.y !== null)
               .map((p, idx) => {
+                const team = p.team === "away" ? "away" : "home";
                 const parts = (p.player_id || "PLAYER_1").split("_");
-                const playerNum = Number(parts[1]) || (idx + 1);
+                const playerNum = Number(parts[1]) || idx + 1;
                 const curX = (p.x ?? 0.5) * 105;
                 const curY = (p.y ?? 0.5) * 68;
 
@@ -460,8 +495,8 @@ function VideoReconstructionStudio() {
                 let vy = 0;
                 const nextP = nextMap.get(p.player_id);
                 if (nextP && nextP.x !== null && nextP.y !== null) {
-                  const dx = (nextP.x * 105) - curX;
-                  const dy = (nextP.y * 68) - curY;
+                  const dx = nextP.x * 105 - curX;
+                  const dy = nextP.y * 68 - curY;
                   const dist = Math.hypot(dx, dy);
                   if (dist > 0.04) {
                     const vectorLen = Math.min(9.45, dist * effectiveFps * 0.9);
@@ -471,13 +506,23 @@ function VideoReconstructionStudio() {
                 }
                 const jerseyColor =
                   p.jersey_color ||
-                  analysisResult.data?.team_colors?.[p.team] ||
-                  analysisResult.data?.team_colors?.[p.team === "away" ? "away" : "home"];
+                  analysisResult.data?.team_colors?.[team] ||
+                  DEFAULT_TEAM_COLORS[team];
 
                 return {
                   id: p.player_id,
-                  team: (p.team || "home") as any,
-                  ...(jerseyColor ? { jerseyColor } : {}),
+                  team,
+                  jerseyColor,
+                  teamColors: {
+                    home:
+                      res.team_colors?.home ??
+                      analysisResult.data?.team_colors?.home ??
+                      DEFAULT_TEAM_COLORS.home,
+                    away:
+                      res.team_colors?.away ??
+                      analysisResult.data?.team_colors?.away ??
+                      DEFAULT_TEAM_COLORS.away,
+                  },
                   number: playerNum,
                   name: p.player_id,
                   role: "Field",
@@ -500,7 +545,12 @@ function VideoReconstructionStudio() {
 
   // Load frame tracking data with instant memory lookup
   useEffect(() => {
-    if (!analysisResult?.data || (analysisResult as any).status === "error" || analysisResult.data.status === "error") return;
+    if (
+      !analysisResult?.data ||
+      (analysisResult as any).status === "error" ||
+      analysisResult.data.status === "error"
+    )
+      return;
     const cached = allFramesRef.current[currentFrame];
     if (cached && cached.length > 0) {
       setFramePlayers(cached);
@@ -508,23 +558,41 @@ function VideoReconstructionStudio() {
     }
 
     const matchId = analysisResult.match_id;
-    apiFetch<{ players: Array<{ player_id: string; team: string; x: number | null; y: number | null; jersey_color?: string | null }> }>(
-      `/game-state/${matchId}/${currentFrame}`
-    )
+    apiFetch<{
+      players: Array<{
+        player_id: string;
+        team: string;
+        x: number | null;
+        y: number | null;
+        jersey_color?: string | null;
+      }>;
+      team_colors?: { home: string; away: string };
+    }>(`/game-state/${matchId}/${currentFrame}`)
       .then((res) => {
         const mapped: Player[] = (res.players || [])
           .filter((p) => p.x !== null && p.y !== null)
           .map((p, idx) => {
+            const team = p.team === "away" ? "away" : "home";
             const parts = (p.player_id || "PLAYER_1").split("_");
-            const playerNum = Number(parts[1]) || (idx + 1);
+            const playerNum = Number(parts[1]) || idx + 1;
             const jerseyColor =
               p.jersey_color ||
-              analysisResult.data?.team_colors?.[p.team] ||
-              analysisResult.data?.team_colors?.[p.team === "away" ? "away" : "home"];
+              analysisResult.data?.team_colors?.[team] ||
+              DEFAULT_TEAM_COLORS[team];
             return {
               id: p.player_id,
-              team: (p.team || "home") as any,
-              ...(jerseyColor ? { jerseyColor } : {}),
+              team,
+              jerseyColor,
+              teamColors: {
+                home:
+                  res.team_colors?.home ??
+                  analysisResult.data?.team_colors?.home ??
+                  DEFAULT_TEAM_COLORS.home,
+                away:
+                  res.team_colors?.away ??
+                  analysisResult.data?.team_colors?.away ??
+                  DEFAULT_TEAM_COLORS.away,
+              },
               number: playerNum,
               name: p.player_id,
               role: "Field",
@@ -544,9 +612,16 @@ function VideoReconstructionStudio() {
   useEffect(() => {
     let animId: number;
     const syncLoop = () => {
-      if (videoRef.current && isPlaying && analysisResult?.data && (analysisResult as any).status !== "error" && analysisResult.data.status !== "error") {
+      if (
+        videoRef.current &&
+        isPlaying &&
+        analysisResult?.data &&
+        (analysisResult as any).status !== "error" &&
+        analysisResult.data.status !== "error"
+      ) {
         const startOffset = analysisResult.data?.start_time_sec || 0;
-        const endOffset = analysisResult.data?.end_time_sec || (startOffset + (maxProcessedFrame / fps));
+        const endOffset =
+          analysisResult.data?.end_time_sec || startOffset + maxProcessedFrame / fps;
         const curTime = videoRef.current.currentTime;
 
         // Loop segment if video reaches end of crop
@@ -558,7 +633,7 @@ function VideoReconstructionStudio() {
 
         const computedFrame = Math.min(
           maxProcessedFrame,
-          Math.max(0, Math.round((curTime - startOffset) * fps))
+          Math.max(0, Math.round((curTime - startOffset) * fps)),
         );
         setCurrentFrame((prev) => {
           if (prev !== computedFrame) {
@@ -588,7 +663,10 @@ function VideoReconstructionStudio() {
   const togglePlay = () => {
     if (!videoRef.current) return;
     if (videoRef.current.paused) {
-      videoRef.current.play().then(() => setIsPlaying(true)).catch(console.error);
+      videoRef.current
+        .play()
+        .then(() => setIsPlaying(true))
+        .catch(console.error);
     } else {
       videoRef.current.pause();
       setIsPlaying(false);
@@ -604,7 +682,7 @@ function VideoReconstructionStudio() {
     }
     const startOffset = analysisResult?.data.start_time_sec || 0;
     if (videoRef.current) {
-      videoRef.current.currentTime = startOffset + (clamped / fps);
+      videoRef.current.currentTime = startOffset + clamped / fps;
     }
   };
 
@@ -614,7 +692,7 @@ function VideoReconstructionStudio() {
     const curTime = videoRef.current.currentTime;
     const computedFrame = Math.min(
       maxProcessedFrame,
-      Math.max(0, Math.round((curTime - startOffset) * fps))
+      Math.max(0, Math.round((curTime - startOffset) * fps)),
     );
     setCurrentFrame(computedFrame);
     const cached = allFramesRef.current[computedFrame];
@@ -637,7 +715,9 @@ function VideoReconstructionStudio() {
     return `${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}.${ms.toString().padStart(2, "0")}`;
   };
 
-  const currentInsight = analysisResult?.data?.sample_insights?.find((s) => s.frame === currentFrame);
+  const currentInsight = analysisResult?.data?.sample_insights?.find(
+    (s) => s.frame === currentFrame,
+  );
 
   return (
     <>
@@ -684,7 +764,8 @@ function VideoReconstructionStudio() {
         <div className="flex items-center gap-2">
           <ShieldCheck className="h-4 w-4 text-emerald-400 shrink-0" />
           <span>
-            <strong className="uppercase tracking-wider">Perception Engine Active:</strong> YOLOv8 + ByteTrack + Adaptive Pitch Homography is operational.
+            <strong className="uppercase tracking-wider">Perception Engine Active:</strong> YOLOv8 +
+            ByteTrack + Adaptive Pitch Homography is operational.
           </span>
         </div>
         <button
@@ -707,7 +788,8 @@ function VideoReconstructionStudio() {
               <div className="mb-4 rounded-lg border border-border bg-panel-alt/50 p-3 space-y-2.5">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-semibold text-foreground flex items-center gap-1.5">
-                    <Database className="h-3.5 w-3.5 text-emerald-400" /> Stored Match Data ({storedVideos.length})
+                    <Database className="h-3.5 w-3.5 text-emerald-400" /> Stored Match Data (
+                    {storedVideos.length})
                   </span>
                   <span className="text-[10px] text-muted-foreground font-mono">
                     Persisted on Disk
@@ -716,7 +798,8 @@ function VideoReconstructionStudio() {
 
                 <div className="max-h-48 overflow-y-auto space-y-1.5 pr-1 text-xs">
                   {storedVideos.map((stored) => {
-                    const isSelected = selectedStoredId === stored.video_id || videoId === stored.video_id;
+                    const isSelected =
+                      selectedStoredId === stored.video_id || videoId === stored.video_id;
                     return (
                       <div
                         key={stored.video_id}
@@ -729,7 +812,10 @@ function VideoReconstructionStudio() {
                       >
                         <div className="min-w-0 flex-1">
                           <div className="flex items-center gap-1.5">
-                            <span className="font-semibold text-[11px] truncate text-foreground group-hover:text-emerald-400 transition-colors" title={stored.filename}>
+                            <span
+                              className="font-semibold text-[11px] truncate text-foreground group-hover:text-emerald-400 transition-colors"
+                              title={stored.filename}
+                            >
                               {stored.filename}
                             </span>
                             {stored.processed ? (
@@ -745,7 +831,9 @@ function VideoReconstructionStudio() {
                           <div className="text-[10px] text-muted-foreground font-mono mt-0.5 flex items-center gap-2">
                             <span>{formatTime(stored.duration_sec || 0)}</span>
                             <span>•</span>
-                            <span>{stored.total_frames || 0}f @ {stored.fps || 25}fps</span>
+                            <span>
+                              {stored.total_frames || 0}f @ {stored.fps || 25}fps
+                            </span>
                             <span>•</span>
                             <span>{(stored.size_bytes / (1024 * 1024)).toFixed(1)}MB</span>
                           </div>
@@ -787,7 +875,9 @@ function VideoReconstructionStudio() {
               onDragOver={(e) => e.preventDefault()}
               onDrop={handleDrop}
               className={`border-2 border-dashed p-5 text-center cursor-pointer transition-colors rounded ${
-                file ? "border-emerald-500/60 bg-emerald-500/5" : "border-border hover:border-emerald-500/40"
+                file
+                  ? "border-emerald-500/60 bg-emerald-500/5"
+                  : "border-border hover:border-emerald-500/40"
               }`}
               onClick={() => document.getElementById("video-file-input")?.click()}
             >
@@ -816,14 +906,17 @@ function VideoReconstructionStudio() {
                   </div>
                   {videoMeta && (
                     <div className="mt-2 text-[11px] font-mono text-emerald-300 border border-emerald-500/30 bg-emerald-500/10 p-1.5 rounded inline-block">
-                      Duration: {formatTime(videoMeta.duration_sec || 0)} • {videoMeta.total_frames} frames @ {videoMeta.fps} FPS ({videoMeta.width}x{videoMeta.height})
+                      Duration: {formatTime(videoMeta.duration_sec || 0)} • {videoMeta.total_frames}{" "}
+                      frames @ {videoMeta.fps} FPS ({videoMeta.width}x{videoMeta.height})
                     </div>
                   )}
                 </div>
               ) : videoId && selectedVideoName ? (
                 <div>
                   <div className="text-xs text-muted-foreground">Active Stored Video:</div>
-                  <div className="text-sm font-semibold text-emerald-400 mt-0.5">{selectedVideoName}</div>
+                  <div className="text-sm font-semibold text-emerald-400 mt-0.5">
+                    {selectedVideoName}
+                  </div>
                   <div className="text-[11px] text-muted-foreground mt-1">
                     Click to select a different local file or pick from Stored Data above
                   </div>
@@ -831,7 +924,9 @@ function VideoReconstructionStudio() {
               ) : (
                 <div>
                   <div className="text-sm font-medium">Click to upload or drag & drop video</div>
-                  <div className="text-xs text-muted-foreground mt-1">Upload any match clip (.mp4, .mov, .avi, .webm)</div>
+                  <div className="text-xs text-muted-foreground mt-1">
+                    Upload any match clip (.mp4, .mov, .avi, .webm)
+                  </div>
                 </div>
               )}
             </div>
@@ -849,7 +944,10 @@ function VideoReconstructionStudio() {
                   </span>
                 </div>
                 <p className="text-[11px] text-muted-foreground leading-relaxed">
-                  Autonomous perspective homography with dynamic grass segmentation. Continuously reconstructs full 105m × 68m coordinates without blindspots, clipping, or cut-offs, ensuring every defender, midfielder, and attacker movement is precisely tracked.
+                  Autonomous perspective homography with dynamic grass segmentation. Continuously
+                  reconstructs full 105m × 68m coordinates without blindspots, clipping, or
+                  cut-offs, ensuring every defender, midfielder, and attacker movement is precisely
+                  tracked.
                 </p>
                 <div className="flex items-center gap-3 pt-1 text-[10px] text-emerald-300/90 font-mono">
                   <span>✓ 0% Boundary Clipping</span>
@@ -869,7 +967,8 @@ function VideoReconstructionStudio() {
                     {segmentMode === "30s" && "First 30 sec (~750 frames)"}
                     {segmentMode === "1m" && "First 1 min (~1,500 frames)"}
                     {segmentMode === "3m" && "First 3 min (~4,500 frames)"}
-                    {segmentMode === "crop" && `${formatTime(cropStartMin * 60 + cropStartSec)} → ${formatTime(cropEndMin * 60 + cropEndSec)}`}
+                    {segmentMode === "crop" &&
+                      `${formatTime(cropStartMin * 60 + cropStartSec)} → ${formatTime(cropEndMin * 60 + cropEndSec)}`}
                   </span>
                 </div>
 
@@ -903,7 +1002,8 @@ function VideoReconstructionStudio() {
                   <div className="mt-2.5 rounded border border-emerald-500/30 bg-emerald-950/20 p-2.5 space-y-2">
                     <div className="text-[11px] font-medium text-emerald-300 flex items-center justify-between">
                       <span className="flex items-center gap-1 font-semibold">
-                        <Scissors className="h-3.5 w-3.5" /> Custom Time Interval (e.g. Minute 2 to 3)
+                        <Scissors className="h-3.5 w-3.5" /> Custom Time Interval (e.g. Minute 2 to
+                        3)
                       </span>
                       {videoMeta?.duration_sec ? (
                         <span className="text-[10px] text-muted-foreground font-mono">
@@ -925,7 +1025,9 @@ function VideoReconstructionStudio() {
                               min={0}
                               max={120}
                               value={cropStartMin}
-                              onChange={(e) => setCropStartMin(Math.max(0, parseInt(e.target.value) || 0))}
+                              onChange={(e) =>
+                                setCropStartMin(Math.max(0, parseInt(e.target.value) || 0))
+                              }
                               className="w-12 bg-panel-alt border border-border rounded px-1.5 py-0.5 text-center font-bold text-foreground"
                             />
                             <span className="text-muted-foreground text-[10px]">m</span>
@@ -937,7 +1039,11 @@ function VideoReconstructionStudio() {
                               min={0}
                               max={59}
                               value={cropStartSec}
-                              onChange={(e) => setCropStartSec(Math.max(0, Math.min(59, parseInt(e.target.value) || 0)))}
+                              onChange={(e) =>
+                                setCropStartSec(
+                                  Math.max(0, Math.min(59, parseInt(e.target.value) || 0)),
+                                )
+                              }
                               className="w-12 bg-panel-alt border border-border rounded px-1.5 py-0.5 text-center font-bold text-foreground"
                             />
                             <span className="text-muted-foreground text-[10px]">s</span>
@@ -957,7 +1063,9 @@ function VideoReconstructionStudio() {
                               min={0}
                               max={120}
                               value={cropEndMin}
-                              onChange={(e) => setCropEndMin(Math.max(0, parseInt(e.target.value) || 0))}
+                              onChange={(e) =>
+                                setCropEndMin(Math.max(0, parseInt(e.target.value) || 0))
+                              }
                               className="w-12 bg-panel-alt border border-border rounded px-1.5 py-0.5 text-center font-bold text-foreground"
                             />
                             <span className="text-muted-foreground text-[10px]">m</span>
@@ -969,7 +1077,11 @@ function VideoReconstructionStudio() {
                               min={0}
                               max={59}
                               value={cropEndSec}
-                              onChange={(e) => setCropEndSec(Math.max(0, Math.min(59, parseInt(e.target.value) || 0)))}
+                              onChange={(e) =>
+                                setCropEndSec(
+                                  Math.max(0, Math.min(59, parseInt(e.target.value) || 0)),
+                                )
+                              }
                               className="w-12 bg-panel-alt border border-border rounded px-1.5 py-0.5 text-center font-bold text-foreground"
                             />
                             <span className="text-muted-foreground text-[10px]">s</span>
@@ -980,7 +1092,9 @@ function VideoReconstructionStudio() {
 
                     {/* Quick Interval Chips */}
                     <div className="flex items-center gap-1 flex-wrap pt-0.5">
-                      <span className="text-[10px] text-muted-foreground mr-1">Quick intervals:</span>
+                      <span className="text-[10px] text-muted-foreground mr-1">
+                        Quick intervals:
+                      </span>
                       {[
                         { label: "Minute 0–1", sm: 0, ss: 0, em: 1, es: 0 },
                         { label: "Minute 1–2", sm: 1, ss: 0, em: 2, es: 0 },
@@ -1007,10 +1121,20 @@ function VideoReconstructionStudio() {
                     {/* Dynamic crop verification info */}
                     <div className="pt-1 text-[11px] font-mono flex items-center justify-between border-t border-emerald-500/20 text-emerald-300">
                       <span>
-                        Crop window: {formatTime(cropStartMin * 60 + cropStartSec)} → {formatTime(cropEndMin * 60 + cropEndSec)}
+                        Crop window: {formatTime(cropStartMin * 60 + cropStartSec)} →{" "}
+                        {formatTime(cropEndMin * 60 + cropEndSec)}
                       </span>
                       <span>
-                        {Math.max(0, (cropEndMin * 60 + cropEndSec) - (cropStartMin * 60 + cropStartSec))}s span (~{Math.max(0, (cropEndMin * 60 + cropEndSec) - (cropStartMin * 60 + cropStartSec)) * 25}f)
+                        {Math.max(
+                          0,
+                          cropEndMin * 60 + cropEndSec - (cropStartMin * 60 + cropStartSec),
+                        )}
+                        s span (~
+                        {Math.max(
+                          0,
+                          cropEndMin * 60 + cropEndSec - (cropStartMin * 60 + cropStartSec),
+                        ) * 25}
+                        f)
                       </span>
                     </div>
                   </div>
@@ -1021,7 +1145,8 @@ function VideoReconstructionStudio() {
               <div className="rounded-lg border border-border bg-panel-alt/40 p-2.5 space-y-1.5">
                 <div className="flex items-center justify-between">
                   <span className="text-foreground flex items-center gap-1.5 font-semibold text-xs">
-                    <Sparkles className="h-3.5 w-3.5 text-emerald-400" /> Pipeline Engine Optimization
+                    <Sparkles className="h-3.5 w-3.5 text-emerald-400" /> Pipeline Engine
+                    Optimization
                   </span>
                   <span className="text-[10px] bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 font-semibold px-2 py-0.5 rounded-full flex items-center gap-1">
                     <CheckCircle2 className="h-3 w-3" /> Auto-Tuned (Optimal)
@@ -1029,19 +1154,33 @@ function VideoReconstructionStudio() {
                 </div>
                 <div className="grid grid-cols-2 gap-2 pt-1 text-[11px]">
                   <div className="bg-panel border border-border p-2 rounded">
-                    <div className="text-muted-foreground text-[10px] font-medium">Frame Sampling Stride</div>
-                    <div className="text-xs font-bold text-sky-400 font-mono mt-0.5">Stride 1 (100% Fidelity)</div>
-                    <div className="text-[10px] text-muted-foreground mt-0.5">Analyzes every frame for fluid 60 FPS motion.</div>
+                    <div className="text-muted-foreground text-[10px] font-medium">
+                      Frame Sampling Stride
+                    </div>
+                    <div className="text-xs font-bold text-sky-400 font-mono mt-0.5">
+                      Stride 1 (100% Fidelity)
+                    </div>
+                    <div className="text-[10px] text-muted-foreground mt-0.5">
+                      Analyzes every frame for fluid 60 FPS motion.
+                    </div>
                   </div>
                   <div className="bg-panel border border-border p-2 rounded">
-                    <div className="text-muted-foreground text-[10px] font-medium">Detection Sensitivity</div>
-                    <div className="text-xs font-bold text-emerald-400 font-mono mt-0.5">0.08 Confidence Threshold</div>
-                    <div className="text-[10px] text-muted-foreground mt-0.5">High recall tracking all 22 outfield players.</div>
+                    <div className="text-muted-foreground text-[10px] font-medium">
+                      Detection Sensitivity
+                    </div>
+                    <div className="text-xs font-bold text-emerald-400 font-mono mt-0.5">
+                      0.08 Confidence Threshold
+                    </div>
+                    <div className="text-[10px] text-muted-foreground mt-0.5">
+                      High recall tracking all 22 outfield players.
+                    </div>
                   </div>
                 </div>
                 <div className="rounded bg-panel border border-border p-1.5 px-2 text-[10px] text-muted-foreground flex items-center justify-between">
                   <span>Trajectory Smoothing & Filter:</span>
-                  <span className="font-mono text-emerald-400 font-semibold">Active (Savitzky-Golay + Kalman)</span>
+                  <span className="font-mono text-emerald-400 font-semibold">
+                    Active (Savitzky-Golay + Kalman)
+                  </span>
                 </div>
               </div>
             </div>
@@ -1091,10 +1230,10 @@ function VideoReconstructionStudio() {
 
         {/* Right Column: Dual View (Video Playback & Synchronized 2D Pitch) */}
         <div className="lg:col-span-7 space-y-4">
-          <Panel 
-            title="Synchronized Game State Radar" 
+          <Panel
+            title="Synchronized Game State Radar"
             subtitle={
-              analysisResult 
+              analysisResult
                 ? `Frame ${currentFrame} / ${maxProcessedFrame} (${formatTime(currentFrame / fps)} / ${formatTime(maxProcessedFrame / fps)})`
                 : "Waiting for video upload"
             }
@@ -1102,7 +1241,7 @@ function VideoReconstructionStudio() {
             {/* Split Screen Container */}
             <div className="grid md:grid-cols-2 gap-3 items-center">
               {/* Video Player */}
-              <div 
+              <div
                 ref={videoContainerRef}
                 onClick={handleVideoClick}
                 className="relative aspect-video bg-black border border-border flex items-center justify-center overflow-hidden rounded group cursor-pointer"
@@ -1143,44 +1282,39 @@ function VideoReconstructionStudio() {
 
               {/* 2D Pitch Radar with Inferred Team Jersey Badges */}
               <div className="border border-border bg-panel-alt/40 p-2 rounded overflow-hidden space-y-1.5">
-                {analysisResult?.data?.team_names && (
-                  <div className="flex items-center justify-between text-xs px-1 pb-1 border-b border-border/50">
-                    <div className="flex items-center gap-1.5 font-medium">
-                      <span
-                        className="inline-block h-3 w-3 rounded-full border border-white/30 shadow-sm"
-                        style={{
-                          backgroundColor:
-                            analysisResult.data.team_colors?.[analysisResult.data.team_names[0]] || "#E62325",
-                        }}
-                      />
-                      <span className="text-foreground">{analysisResult.data.team_names[0]} Team</span>
-                      <span className="text-[10px] text-muted-foreground font-mono font-normal">#1–11</span>
-                    </div>
-
-                    <div className="text-[10px] text-muted-foreground font-mono">
-                      FIFA Metric Coordinates (105m × 68m)
-                    </div>
-
-                    <div className="flex items-center gap-1.5 font-medium">
-                      <span className="text-[10px] text-muted-foreground font-mono font-normal">#1–11</span>
-                      <span className="text-foreground">{analysisResult.data.team_names[1]} Team</span>
-                      <span
-                        className="inline-block h-3 w-3 rounded-full border border-white/30 shadow-sm"
-                        style={{
-                          backgroundColor:
-                            analysisResult.data.team_colors?.[analysisResult.data.team_names[1]] || "#034694",
-                        }}
-                      />
-                    </div>
+                <div className="flex items-center justify-between text-xs px-1 pb-1 border-b border-border/50">
+                  <div className="flex items-center gap-1.5 font-medium">
+                    <span
+                      className="inline-block h-3 w-3 rounded-full border border-white/30 shadow-sm"
+                      style={{ backgroundColor: teamColor(framePlayers, "home") }}
+                    />
+                    <span className="text-foreground">
+                      {teamDisplayName("home", framePlayers, teamNames)}
+                    </span>
+                    <span className="text-[10px] text-muted-foreground font-mono font-normal">
+                      #1–11
+                    </span>
                   </div>
-                )}
+
+                  <div className="text-[10px] text-muted-foreground font-mono">
+                    FIFA Metric Coordinates (105m × 68m)
+                  </div>
+
+                  <div className="flex items-center gap-1.5 font-medium">
+                    <span className="text-[10px] text-muted-foreground font-mono font-normal">
+                      #1–11
+                    </span>
+                    <span className="text-foreground">
+                      {teamDisplayName("away", framePlayers, teamNames)}
+                    </span>
+                    <span
+                      className="inline-block h-3 w-3 rounded-full border border-white/30 shadow-sm"
+                      style={{ backgroundColor: teamColor(framePlayers, "away") }}
+                    />
+                  </div>
+                </div>
                 <div className="bg-turf p-1 rounded overflow-hidden border border-emerald-950">
-                  <Pitch 
-                    players={framePlayers} 
-                    height={220} 
-                    showVectors={true} 
-                    heat={false} 
-                  />
+                  <Pitch players={framePlayers} height={220} showVectors={true} heat={false} />
                 </div>
               </div>
             </div>
@@ -1221,8 +1355,14 @@ function VideoReconstructionStudio() {
                       title={isPlaying ? "Pause" : "Play"}
                       className="bg-emerald-600 hover:bg-emerald-500 text-white p-1.5 rounded transition-colors px-2.5 flex items-center gap-1"
                     >
-                      {isPlaying ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
-                      <span className="text-[11px] font-semibold">{isPlaying ? "Pause" : "Play"}</span>
+                      {isPlaying ? (
+                        <Pause className="h-3.5 w-3.5" />
+                      ) : (
+                        <Play className="h-3.5 w-3.5" />
+                      )}
+                      <span className="text-[11px] font-semibold">
+                        {isPlaying ? "Pause" : "Play"}
+                      </span>
                     </button>
                     <button
                       onClick={() => handleSeekFrame(Math.min(maxProcessedFrame, currentFrame + 1))}
@@ -1242,7 +1382,9 @@ function VideoReconstructionStudio() {
 
                   {/* Frame & Time Counter */}
                   <div className="font-mono text-xs text-muted-foreground flex items-center gap-2">
-                    <span className="text-emerald-400 font-semibold">{formatTime(currentFrame / fps)}</span>
+                    <span className="text-emerald-400 font-semibold">
+                      {formatTime(currentFrame / fps)}
+                    </span>
                     <span>/</span>
                     <span>{formatTime(maxProcessedFrame / fps)}</span>
                     <span className="text-[10px] text-muted-foreground bg-panel-alt px-1.5 py-0.5 rounded border border-border">
@@ -1296,207 +1438,236 @@ function VideoReconstructionStudio() {
           </Panel>
 
           {/* Video Reconstruction Details & Action to Move to Match Explorer (Placed Directly Below Radar Section) */}
-          {analysisResult?.data && (analysisResult as any).status !== "error" && analysisResult.data.status !== "error" && (
-            <Panel
-              title="Reconstruction Details & Video Analytics"
-              subtitle={`Active Video: ${selectedVideoName || file?.name || analysisResult.match_id}`}
-            >
-              <div className="space-y-4">
-                {/* Hero CTA: Move to Match Explorer */}
-                <div className="rounded-lg border border-emerald-500/40 bg-gradient-to-r from-emerald-950/40 via-panel to-teal-950/30 p-3.5 shadow-md">
-                  <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-                    <div>
-                      <div className="flex items-center gap-2 text-foreground font-bold text-sm">
-                        <span className="flex h-2.5 w-2.5 rounded-full bg-emerald-400 animate-pulse" />
-                        <span>Game State Reconstructed for this Video</span>
+          {analysisResult?.data &&
+            (analysisResult as any).status !== "error" &&
+            analysisResult.data.status !== "error" && (
+              <Panel
+                title="Reconstruction Details & Video Analytics"
+                subtitle={`Active Video: ${selectedVideoName || file?.name || analysisResult.match_id}`}
+              >
+                <div className="space-y-4">
+                  {/* Hero CTA: Move to Match Explorer */}
+                  <div className="rounded-lg border border-emerald-500/40 bg-gradient-to-r from-emerald-950/40 via-panel to-teal-950/30 p-3.5 shadow-md">
+                    <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                      <div>
+                        <div className="flex items-center gap-2 text-foreground font-bold text-sm">
+                          <span className="flex h-2.5 w-2.5 rounded-full bg-emerald-400 animate-pulse" />
+                          <span>Game State Reconstructed for this Video</span>
+                        </div>
+                        <p className="text-xs text-muted-foreground mt-0.5">
+                          Canonical coordinates, dynamic homography, and tactical advantage have
+                          been computed. Move to Match Explorer to inspect frame-by-frame player
+                          trajectories and inferred events.
+                        </p>
                       </div>
-                      <p className="text-xs text-muted-foreground mt-0.5">
-                        Canonical coordinates, dynamic homography, and tactical advantage have been computed. Move to Match Explorer to inspect frame-by-frame player trajectories and inferred events.
-                      </p>
-                    </div>
 
-                    <button
-                      onClick={() => {
-                        setMatchId(analysisResult.match_id);
-                        setDataset(`Video: ${(selectedVideoName || file?.name || analysisResult.match_id).replace(/\.[^/.]+$/, "")}`);
-                        setFrame(0);
-                        navigate({ to: "/match-explorer" });
-                      }}
-                      className="flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs py-2.5 px-5 rounded-lg shadow-md transition-all hover:shadow-emerald-900/40 hover:scale-[1.02] active:scale-[0.98] shrink-0 cursor-pointer"
-                    >
-                      <Compass className="h-4 w-4 text-emerald-200" />
-                      <span>Move to Match Explorer</span>
-                      <ArrowRight className="h-4 w-4" />
-                    </button>
-                  </div>
-                </div>
-
-                {/* Key Reconstruction Metrics Grid */}
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-xs">
-                  <div className="border border-border bg-panel-alt p-2.5 rounded">
-                    <div className="text-muted-foreground text-[10px] font-medium uppercase tracking-wider">Frames Reconstructed</div>
-                    <div className="text-base font-bold font-mono text-foreground mt-1">
-                      {analysisResult.data.frame_count ?? 0} <span className="text-xs font-normal text-muted-foreground">frames</span>
-                    </div>
-                    <div className="text-[10px] text-muted-foreground mt-0.5 font-mono">
-                      {analysisResult.data.duration_sec != null 
-                        ? `${Number(analysisResult.data.duration_sec).toFixed(1)}s duration` 
-                        : `${(analysisResult.data.max_frame ? analysisResult.data.max_frame / fps : 0).toFixed(1)}s duration`}
+                      <button
+                        onClick={() => {
+                          setMatchId(analysisResult.match_id);
+                          setDataset(
+                            `Video: ${(selectedVideoName || file?.name || analysisResult.match_id).replace(/\.[^/.]+$/, "")}`,
+                          );
+                          setFrame(0);
+                          navigate({ to: "/match-explorer" });
+                        }}
+                        className="flex items-center justify-center gap-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-xs py-2.5 px-5 rounded-lg shadow-md transition-all hover:shadow-emerald-900/40 hover:scale-[1.02] active:scale-[0.98] shrink-0 cursor-pointer"
+                      >
+                        <Compass className="h-4 w-4 text-emerald-200" />
+                        <span>Move to Match Explorer</span>
+                        <ArrowRight className="h-4 w-4" />
+                      </button>
                     </div>
                   </div>
 
-                  <div className="border border-border bg-panel-alt p-2.5 rounded">
-                    <div className="text-muted-foreground text-[10px] font-medium uppercase tracking-wider">Player Observations</div>
-                    <div className="text-base font-bold font-mono text-emerald-400 mt-1">
-                      {analysisResult.data.tracking_rows ? Number(analysisResult.data.tracking_rows).toLocaleString() : 0}
+                  {/* Key Reconstruction Metrics Grid */}
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 text-xs">
+                    <div className="border border-border bg-panel-alt p-2.5 rounded">
+                      <div className="text-muted-foreground text-[10px] font-medium uppercase tracking-wider">
+                        Frames Reconstructed
+                      </div>
+                      <div className="text-base font-bold font-mono text-foreground mt-1">
+                        {analysisResult.data.frame_count ?? 0}{" "}
+                        <span className="text-xs font-normal text-muted-foreground">frames</span>
+                      </div>
+                      <div className="text-[10px] text-muted-foreground mt-0.5 font-mono">
+                        {analysisResult.data.duration_sec != null
+                          ? `${Number(analysisResult.data.duration_sec).toFixed(1)}s duration`
+                          : `${(analysisResult.data.max_frame ? analysisResult.data.max_frame / fps : 0).toFixed(1)}s duration`}
+                      </div>
                     </div>
-                    <div className="text-[10px] text-muted-foreground mt-0.5">
-                      22 Outfield + Referee Filtered
+
+                    <div className="border border-border bg-panel-alt p-2.5 rounded">
+                      <div className="text-muted-foreground text-[10px] font-medium uppercase tracking-wider">
+                        Player Observations
+                      </div>
+                      <div className="text-base font-bold font-mono text-emerald-400 mt-1">
+                        {analysisResult.data.tracking_rows
+                          ? Number(analysisResult.data.tracking_rows).toLocaleString()
+                          : 0}
+                      </div>
+                      <div className="text-[10px] text-muted-foreground mt-0.5">
+                        22 Outfield + Referee Filtered
+                      </div>
+                    </div>
+
+                    <div className="border border-border bg-panel-alt p-2.5 rounded">
+                      <div className="text-muted-foreground text-[10px] font-medium uppercase tracking-wider">
+                        Average TAS Score
+                      </div>
+                      <div className="text-base font-bold font-mono text-sky-400 mt-1">
+                        {analysisResult.data.average_tas != null
+                          ? Number(analysisResult.data.average_tas).toFixed(3)
+                          : "—"}
+                      </div>
+                      <div className="text-[10px] text-muted-foreground mt-0.5">
+                        Tactical Advantage
+                      </div>
+                    </div>
+
+                    <div className="border border-border bg-panel-alt p-2.5 rounded">
+                      <div className="text-muted-foreground text-[10px] font-medium uppercase tracking-wider">
+                        Possession Split
+                      </div>
+                      <div className="text-sm font-bold font-mono text-foreground mt-1 flex items-center justify-between">
+                        <span className="flex items-center gap-1">
+                          <span
+                            className="h-2 w-2 rounded-full inline-block"
+                            style={{ backgroundColor: teamColor(framePlayers, "home") }}
+                          />
+                          {teamDisplayName("home", framePlayers, teamNames)}:{" "}
+                          {Number.isFinite(analysisResult.data.possession_share?.home)
+                            ? `${analysisResult.data.possession_share.home}%`
+                            : "Data not available"}
+                        </span>
+                        <span className="text-muted-foreground font-normal">/</span>
+                        <span className="flex items-center gap-1">
+                          {teamDisplayName("away", framePlayers, teamNames)}:{" "}
+                          {Number.isFinite(analysisResult.data.possession_share?.away)
+                            ? `${analysisResult.data.possession_share.away}%`
+                            : "Data not available"}
+                          <span
+                            className="h-2 w-2 rounded-full inline-block"
+                            style={{ backgroundColor: teamColor(framePlayers, "away") }}
+                          />
+                        </span>
+                      </div>
+                      <div className="text-[10px] text-muted-foreground mt-0.5">
+                        Ball-Free Inferred Control by Kit Color
+                      </div>
                     </div>
                   </div>
 
-                  <div className="border border-border bg-panel-alt p-2.5 rounded">
-                    <div className="text-muted-foreground text-[10px] font-medium uppercase tracking-wider">Average TAS Score</div>
-                    <div className="text-base font-bold font-mono text-sky-400 mt-1">
-                      {analysisResult.data.average_tas != null ? Number(analysisResult.data.average_tas).toFixed(3) : "—"}
+                  {/* Video Source Properties & Perception Specifications */}
+                  <div className="rounded-lg border border-border bg-panel-alt/50 p-2.5 space-y-2 text-xs">
+                    <div className="flex items-center justify-between text-muted-foreground border-b border-border/60 pb-1.5">
+                      <span className="font-semibold text-foreground flex items-center gap-1.5">
+                        <Video className="h-3.5 w-3.5 text-emerald-400" /> Perception Specification
+                      </span>
+                      <span className="font-mono text-[11px] text-emerald-400">
+                        {videoMeta?.width && videoMeta?.height
+                          ? `${videoMeta.width} × ${videoMeta.height}`
+                          : "HD Video"}{" "}
+                        @ {fps} FPS
+                      </span>
                     </div>
-                    <div className="text-[10px] text-muted-foreground mt-0.5">
-                      Tactical Advantage
-                    </div>
-                  </div>
-
-                  <div className="border border-border bg-panel-alt p-2.5 rounded">
-                    <div className="text-muted-foreground text-[10px] font-medium uppercase tracking-wider">Possession Split</div>
-                    <div className="text-sm font-bold font-mono text-foreground mt-1 flex items-center justify-between">
-                      <span className="flex items-center gap-1">
+                    <div className="grid grid-cols-3 gap-2 pt-0.5 text-[11px]">
+                      <div>
+                        <span className="text-muted-foreground block text-[10px]">
+                          Active Match ID
+                        </span>
                         <span
-                          className="h-2 w-2 rounded-full inline-block"
-                          style={{
-                            backgroundColor:
-                              analysisResult.data.team_colors?.[
-                                analysisResult.data.team_names?.[0] || "home"
-                              ] || "#E62325",
-                          }}
-                        />
-                        {analysisResult.data.team_names?.[0] || "Home"}:{" "}
-                        {analysisResult.data.possession_share?.[
-                          analysisResult.data.team_names?.[0] || "home"
-                        ] ?? analysisResult.data.possession_share?.home ?? 50}%
-                      </span>
-                      <span className="text-muted-foreground font-normal">/</span>
-                      <span className="flex items-center gap-1">
-                        {analysisResult.data.team_names?.[1] || "Away"}:{" "}
-                        {analysisResult.data.possession_share?.[
-                          analysisResult.data.team_names?.[1] || "away"
-                        ] ?? analysisResult.data.possession_share?.away ?? 50}%
-                        <span
-                          className="h-2 w-2 rounded-full inline-block"
-                          style={{
-                            backgroundColor:
-                              analysisResult.data.team_colors?.[
-                                analysisResult.data.team_names?.[1] || "away"
-                              ] || "#034694",
-                          }}
-                        />
-                      </span>
-                    </div>
-                    <div className="text-[10px] text-muted-foreground mt-0.5">
-                      Ball-Free Inferred Control by Kit Color
+                          className="font-mono text-foreground text-[11px] truncate block"
+                          title={analysisResult.match_id}
+                        >
+                          {analysisResult.match_id}
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-muted-foreground block text-[10px]">
+                          Pitch Coordinate Space
+                        </span>
+                        <span className="font-semibold text-emerald-400 text-[11px] block">
+                          105m × 68m Calibrated
+                        </span>
+                      </div>
+                      <div>
+                        <span className="text-muted-foreground block text-[10px]">
+                          Smoothing & Mitigations
+                        </span>
+                        <span className="font-semibold text-foreground text-[11px] block">
+                          Savitzky-Golay + Kalman
+                        </span>
+                      </div>
                     </div>
                   </div>
-                </div>
 
-                {/* Video Source Properties & Perception Specifications */}
-                <div className="rounded-lg border border-border bg-panel-alt/50 p-2.5 space-y-2 text-xs">
-                  <div className="flex items-center justify-between text-muted-foreground border-b border-border/60 pb-1.5">
-                    <span className="font-semibold text-foreground flex items-center gap-1.5">
-                      <Video className="h-3.5 w-3.5 text-emerald-400" /> Perception Specification
-                    </span>
-                    <span className="font-mono text-[11px] text-emerald-400">
-                      {videoMeta?.width && videoMeta?.height ? `${videoMeta.width} × ${videoMeta.height}` : "HD Video"} @ {fps} FPS
-                    </span>
-                  </div>
-                  <div className="grid grid-cols-3 gap-2 pt-0.5 text-[11px]">
-                    <div>
-                      <span className="text-muted-foreground block text-[10px]">Active Match ID</span>
-                      <span className="font-mono text-foreground text-[11px] truncate block" title={analysisResult.match_id}>
-                        {analysisResult.match_id}
-                      </span>
+                  {/* Deep Dive Action Navigation Row */}
+                  <div className="border-t border-border pt-2.5">
+                    <div className="text-[11px] text-muted-foreground mb-2 font-medium">
+                      Continue analyzing this video across all system modules:
                     </div>
-                    <div>
-                      <span className="text-muted-foreground block text-[10px]">Pitch Coordinate Space</span>
-                      <span className="font-semibold text-emerald-400 text-[11px] block">
-                        105m × 68m Calibrated
-                      </span>
-                    </div>
-                    <div>
-                      <span className="text-muted-foreground block text-[10px]">Smoothing & Mitigations</span>
-                      <span className="font-semibold text-foreground text-[11px] block">
-                        Savitzky-Golay + Kalman
-                      </span>
+                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
+                      <button
+                        onClick={() => {
+                          setMatchId(analysisResult.match_id);
+                          setDataset(
+                            `Video: ${(selectedVideoName || file?.name || analysisResult.match_id).replace(/\.[^/.]+$/, "")}`,
+                          );
+                          setFrame(0);
+                          navigate({ to: "/match-explorer" });
+                        }}
+                        className="flex items-center justify-center gap-1.5 border border-emerald-500/40 bg-emerald-950/30 hover:bg-emerald-900/40 text-emerald-300 text-xs font-semibold py-2 px-2.5 rounded transition-colors shadow-sm cursor-pointer"
+                      >
+                        <Compass className="h-3.5 w-3.5 text-emerald-400" />
+                        <span>Match Explorer</span>
+                      </button>
+                      <button
+                        onClick={() => {
+                          setMatchId(analysisResult.match_id);
+                          setDataset(
+                            `Video: ${(selectedVideoName || file?.name || analysisResult.match_id).replace(/\.[^/.]+$/, "")}`,
+                          );
+                          setFrame(0);
+                          navigate({ to: "/game-state" });
+                        }}
+                        className="flex items-center justify-center gap-1.5 border border-border bg-panel hover:bg-muted text-foreground text-xs font-medium py-2 px-2.5 rounded transition-colors cursor-pointer"
+                      >
+                        <Layers className="h-3.5 w-3.5 text-muted-foreground" />
+                        <span>Game State</span>
+                      </button>
+                      <button
+                        onClick={() => {
+                          setMatchId(analysisResult.match_id);
+                          setDataset(
+                            `Video: ${(selectedVideoName || file?.name || analysisResult.match_id).replace(/\.[^/.]+$/, "")}`,
+                          );
+                          setFrame(0);
+                          navigate({ to: "/tactical" });
+                        }}
+                        className="flex items-center justify-center gap-1.5 border border-border bg-panel hover:bg-muted text-foreground text-xs font-medium py-2 px-2.5 rounded transition-colors cursor-pointer"
+                      >
+                        <Activity className="h-3.5 w-3.5 text-muted-foreground" />
+                        <span>Tactical Analysis</span>
+                      </button>
+                      <button
+                        onClick={() => {
+                          setMatchId(analysisResult.match_id);
+                          setDataset(
+                            `Video: ${(selectedVideoName || file?.name || analysisResult.match_id).replace(/\.[^/.]+$/, "")}`,
+                          );
+                          setFrame(0);
+                          navigate({ to: "/possession" });
+                        }}
+                        className="flex items-center justify-center gap-1.5 border border-border bg-panel hover:bg-muted text-foreground text-xs font-medium py-2 px-2.5 rounded transition-colors cursor-pointer"
+                      >
+                        <Zap className="h-3.5 w-3.5 text-muted-foreground" />
+                        <span>Possession & Events</span>
+                      </button>
                     </div>
                   </div>
                 </div>
-
-                {/* Deep Dive Action Navigation Row */}
-                <div className="border-t border-border pt-2.5">
-                  <div className="text-[11px] text-muted-foreground mb-2 font-medium">
-                    Continue analyzing this video across all system modules:
-                  </div>
-                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-                    <button
-                      onClick={() => {
-                        setMatchId(analysisResult.match_id);
-                        setDataset(`Video: ${(selectedVideoName || file?.name || analysisResult.match_id).replace(/\.[^/.]+$/, "")}`);
-                        setFrame(0);
-                        navigate({ to: "/match-explorer" });
-                      }}
-                      className="flex items-center justify-center gap-1.5 border border-emerald-500/40 bg-emerald-950/30 hover:bg-emerald-900/40 text-emerald-300 text-xs font-semibold py-2 px-2.5 rounded transition-colors shadow-sm cursor-pointer"
-                    >
-                      <Compass className="h-3.5 w-3.5 text-emerald-400" />
-                      <span>Match Explorer</span>
-                    </button>
-                    <button
-                      onClick={() => {
-                        setMatchId(analysisResult.match_id);
-                        setDataset(`Video: ${(selectedVideoName || file?.name || analysisResult.match_id).replace(/\.[^/.]+$/, "")}`);
-                        setFrame(0);
-                        navigate({ to: "/game-state" });
-                      }}
-                      className="flex items-center justify-center gap-1.5 border border-border bg-panel hover:bg-muted text-foreground text-xs font-medium py-2 px-2.5 rounded transition-colors cursor-pointer"
-                    >
-                      <Layers className="h-3.5 w-3.5 text-muted-foreground" />
-                      <span>Game State</span>
-                    </button>
-                    <button
-                      onClick={() => {
-                        setMatchId(analysisResult.match_id);
-                        setDataset(`Video: ${(selectedVideoName || file?.name || analysisResult.match_id).replace(/\.[^/.]+$/, "")}`);
-                        setFrame(0);
-                        navigate({ to: "/tactical" });
-                      }}
-                      className="flex items-center justify-center gap-1.5 border border-border bg-panel hover:bg-muted text-foreground text-xs font-medium py-2 px-2.5 rounded transition-colors cursor-pointer"
-                    >
-                      <Activity className="h-3.5 w-3.5 text-muted-foreground" />
-                      <span>Tactical Analysis</span>
-                    </button>
-                    <button
-                      onClick={() => {
-                        setMatchId(analysisResult.match_id);
-                        setDataset(`Video: ${(selectedVideoName || file?.name || analysisResult.match_id).replace(/\.[^/.]+$/, "")}`);
-                        setFrame(0);
-                        navigate({ to: "/possession" });
-                      }}
-                      className="flex items-center justify-center gap-1.5 border border-border bg-panel hover:bg-muted text-foreground text-xs font-medium py-2 px-2.5 rounded transition-colors cursor-pointer"
-                    >
-                      <Zap className="h-3.5 w-3.5 text-muted-foreground" />
-                      <span>Possession & Events</span>
-                    </button>
-                  </div>
-                </div>
-              </div>
-            </Panel>
-          )}
+              </Panel>
+            )}
         </div>
       </div>
     </>

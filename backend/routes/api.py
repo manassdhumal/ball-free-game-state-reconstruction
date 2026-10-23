@@ -45,25 +45,28 @@ def game_state_all(match_id: str):
     try:
         df = data.tracking(match_id)
         frames_dict: dict[int, list[dict[str, Any]]] = {}
+        palette = data.team_colors(match_id, df)
         for row in df.itertuples(index=False):
+            team = str(row.team)
+            if team not in ("home", "away"):
+                continue
             f = int(row.frame)
             if f not in frames_dict:
                 frames_dict[f] = []
             pid = str(row.player_id)
-            if not pid.startswith(f"{str(row.team).upper()}_"):
-                pid = f"{str(row.team).upper()}_{pid}"
+            if not pid.startswith(f"{team.upper()}_"):
+                pid = f"{team.upper()}_{pid}"
             conf = getattr(row, "confidence", 1.0)
-            jersey_color = getattr(row, "jersey_color", None)
             frames_dict[f].append({
                 "player_id": pid,
-                "team": row.team,
+                "team": team,
                 "x": None if pd.isna(row.x) else float(row.x),
                 "y": None if pd.isna(row.y) else float(row.y),
                 "confidence": 1.0 if pd.isna(conf) else float(conf),
                 "visible": bool(getattr(row, "visible", True)),
-                "jersey_color": None if pd.isna(jersey_color) else str(jersey_color),
+                "jersey_color": palette[team],
             })
-        return {"match_id": match_id, "frames": frames_dict}
+        return {"match_id": match_id, "frames": frames_dict, "team_colors": palette}
     except (KeyError, FileNotFoundError) as exc:
         raise _not_found(exc) from exc
 
@@ -73,6 +76,14 @@ def game_state(match_id: str, frame_number: int):
     try:
         return data.frame(match_id, frame_number)
     except (IndexError, KeyError, FileNotFoundError) as exc:
+        raise _not_found(exc) from exc
+
+
+@router.get("/tracking-quality/{match_id}")
+def tracking_quality(match_id: str):
+    try:
+        return data.tracking_quality(match_id)
+    except (KeyError, FileNotFoundError) as exc:
         raise _not_found(exc) from exc
 
 
@@ -103,17 +114,37 @@ def trajectory(match_id: str, player_id: str, limit: int = Query(250, ge=1, le=1
         raise _not_found(exc) from exc
 
 
+@router.get("/possession/{match_id}/timeline")
+def possession_timeline(
+    match_id: str,
+    start_frame: int = Query(0, ge=0),
+    end_frame: int = Query(600, ge=0),
+    stride: int = Query(25, ge=1, le=1000),
+):
+    if end_frame < start_frame or (end_frame - start_frame) // stride + 1 > 1000:
+        raise HTTPException(
+            status_code=422,
+            detail="Invalid timeline range: end_frame must be >= start_frame and at most 1000 samples are allowed.",
+        )
+    try:
+        rows = data.possession_timeline(match_id, start_frame, end_frame, stride)
+        return {
+            "availability": {
+                "status": "available" if rows else "unavailable",
+                "message": "Sampled ball-free possession estimates; score is a heuristic, not a probability.",
+            },
+            "data": rows,
+        }
+    except (KeyError, FileNotFoundError) as exc:
+        raise _not_found(exc) from exc
+
+
 @router.get("/possession/{match_id}/{frame_number}")
 def possession(match_id: str, frame_number: int):
     try:
         return data.possession(match_id, frame_number)
     except (IndexError, KeyError, FileNotFoundError) as exc:
         raise _not_found(exc) from exc
-
-
-@router.get("/possession/{match_id}/timeline")
-def possession_timeline(match_id: str):
-    return {"availability": {"status": "unavailable", "message": "Timeline materialization is not cached; request bounded frames instead."}, "data": []}
 
 
 @router.get("/events/{match_id}")
@@ -152,13 +183,45 @@ def ranking(match_id: str, frame_number: int, player_id: str):
         ranked = data.pass_ranking(match_id, frame_number, player_id)
     except (IndexError, KeyError, FileNotFoundError, ValueError) as exc:
         raise _not_found(exc) from exc
-    return {"availability": {"status": "available", "message": "Current-state heuristic fallback; not a completion model.", "provenance": {"method": "Step 82 heuristic fallback", "frame": frame_number}}, "data": ranked}
+    is_video = match_id.startswith("uploaded_") or match_id.startswith("video_")
+    message = "Current-state heuristic fallback; not a calibrated completion model."
+    if is_video:
+        message += " Forward progression is excluded because attack direction is unknown."
+    return {
+        "availability": {
+            "status": "available",
+            "message": message,
+            "provenance": {
+                "method": "Step 82 heuristic fallback",
+                "frame": frame_number,
+                "attack_direction": "unknown" if is_video else "Metrica orientation",
+            },
+        },
+        "data": ranked,
+    }
 
 
 @router.get("/robustness/summary")
 def robustness_summary():
     rows = data.result_rows("step80", "step80_summary.json")
     return {"availability": {"status": "available"}, "data": rows}
+
+
+@router.get("/evaluation/summary")
+def evaluation_summary():
+    result = data.evaluation_summary()
+    if result is None:
+        return {
+            "availability": {
+                "status": "unavailable",
+                "message": "The verified aggregate evaluation report is not present.",
+            },
+            "data": None,
+        }
+    return {
+        "availability": {"status": "available"},
+        "data": result,
+    }
 
 
 @router.get("/robustness/{experiment}")
@@ -175,8 +238,8 @@ def gsr_status():
     return {
         "status": "ready",
         "message": "AI Video Game State Reconstruction perception engine is ready. Upload a gameplay video to extract canonical player tracking and tactical insights.",
-        "results": {"supported_formats": [".mp4", ".mov", ".avi"], "model": "YOLOv8n + ByteTrack"},
-        "provenance": {"detection": "YOLOv8n", "tracking": "ByteTrack", "homography": "Perspective 2D"}
+        "results": {"supported_formats": [".mp4", ".mov", ".avi"], "model": "YOLO26x + ByteTrack"},
+        "provenance": {"detection": "YOLO26x", "tracking": "ByteTrack", "homography": "Perspective 2D"}
     }
 
 

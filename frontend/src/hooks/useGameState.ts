@@ -23,6 +23,8 @@ export function useLivePlayers(matchId: string, frame: number) {
             number,
             name: p.player_id,
             role: "unknown",
+            jerseyColor: p.jersey_color ?? state.team_colors[p.team],
+            teamColors: state.team_colors,
             x: p.x! * 105,
             y: p.y! * 68,
             vx: 0,

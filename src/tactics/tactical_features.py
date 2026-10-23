@@ -7,7 +7,7 @@ from src.possession.spatial_graph import FrameGraph
 def extract_tactical_features(
     frame_graph: FrameGraph, 
     possessor_id: Optional[str] = None,
-    home_attacks_x1: bool = True
+    home_attacks_x1: Optional[bool] = True
 ) -> Dict[str, Any]:
     """
     Extracts geometric and tactical features from a single frame using the
@@ -23,6 +23,7 @@ def extract_tactical_features(
         The player_id of the inferred possessor from the possession baseline.
     home_attacks_x1 : bool
         If True, the home team attacks toward X=1. If False, toward X=0.
+            If None, direction-dependent features are left unavailable.
         (Typically True in 1st half, False in 2nd half).
 
     Returns
@@ -61,6 +62,7 @@ def extract_tactical_features(
         possessor_row = df[df['player_id'] == possessor_id].iloc[0]
         team = possessor_row['team']
         px, py = possessor_row['x'], possessor_row['y']
+        possessing_team_df = df[df['team'] == team]
 
         features['possessor_pressure'] = possessor_row['nearest_opponent_dist']
         
@@ -78,17 +80,15 @@ def extract_tactical_features(
 
             # forward options = teammates positioned ahead of possessor
             # "Ahead" depends on attacking direction
-            if team == 'home':
-                attacks_x1 = home_attacks_x1
+            if home_attacks_x1 is None:
+                features['forward_options'] = np.nan
             else:
-                attacks_x1 = not home_attacks_x1
-
-            if attacks_x1:
-                forward_teammates = team_df[team_df['x'] > px]
-            else:
-                forward_teammates = team_df[team_df['x'] < px]
-                
-            features['forward_options'] = len(forward_teammates)
+                attacks_x1 = home_attacks_x1 if team == 'home' else not home_attacks_x1
+                if attacks_x1:
+                    forward_teammates = possessing_team_df[possessing_team_df['x'] > px]
+                else:
+                    forward_teammates = possessing_team_df[possessing_team_df['x'] < px]
+                features['forward_options'] = len(forward_teammates)
             
         except ValueError:
             # possessor_id not in distance matrix (shouldn't happen if in df, but safe fallback)

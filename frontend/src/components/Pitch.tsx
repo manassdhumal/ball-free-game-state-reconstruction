@@ -1,5 +1,14 @@
 import { useState } from "react";
-import { dist, localDensity, nearest, type Player } from "@/lib/data";
+import {
+  dist,
+  localDensity,
+  nearest,
+  teamColor,
+  teamDisplayName,
+  type Player,
+  type Team,
+} from "@/lib/data";
+import { useSession } from "@/lib/session";
 
 const W = 105;
 const H = 68;
@@ -30,10 +39,8 @@ export function Pitch({
   height?: number;
 }) {
   const [hover, setHover] = useState<Player | null>(null);
+  const { teamNames } = useSession();
   const byId = (id: string) => players.find((p) => p.id === id);
-  const teamColor = (player: Player) =>
-    player.jerseyColor ?? (player.team === "home" ? "var(--home)" : "var(--away)");
-
   const lineStroke = "rgba(255,255,255,0.22)";
 
   return (
@@ -52,7 +59,7 @@ export function Pitch({
                 cx={p.x}
                 cy={p.y}
                 r={9}
-                fill={teamColor(p)}
+                fill={p.jerseyColor ?? teamColor(players, p.team)}
                 opacity={0.14}
               />
             ))}
@@ -111,21 +118,21 @@ export function Pitch({
 
         {/* velocity vectors */}
         {showVectors &&
-          players.map((p) => (
-            (p.vx !== 0 || p.vy !== 0) ? (
+          players.map((p) =>
+            p.vx !== 0 || p.vy !== 0 ? (
               <line
                 key={`v-${p.id}`}
                 x1={p.x}
                 y1={p.y}
                 x2={p.x + p.vx}
                 y2={p.y + p.vy}
-                stroke={teamColor(p)}
+                stroke={teamColor(players, p.team)}
                 strokeWidth={0.32}
                 strokeLinecap="round"
                 opacity={0.9}
               />
-            ) : null
-          ))}
+            ) : null,
+          )}
 
         {players.map((p) => {
           const selected = p.id === selectedId;
@@ -141,7 +148,7 @@ export function Pitch({
                 cx={p.x}
                 cy={p.y}
                 r={selected ? 2.4 : 2}
-                fill={teamColor(p)}
+                fill={p.jerseyColor ?? teamColor(players, p.team)}
                 stroke={selected ? "var(--primary)" : "rgba(0,0,0,0.55)"}
                 strokeWidth={selected ? 0.6 : 0.22}
                 style={{ transition: "cx 45ms linear, cy 45ms linear" }}
@@ -152,7 +159,11 @@ export function Pitch({
                 fontSize={2.1}
                 textAnchor="middle"
                 fill="rgba(255,255,255,0.92)"
-                style={{ pointerEvents: "none", fontVariantNumeric: "tabular-nums", transition: "x 45ms linear, y 45ms linear" }}
+                style={{
+                  pointerEvents: "none",
+                  fontVariantNumeric: "tabular-nums",
+                  transition: "x 45ms linear, y 45ms linear",
+                }}
               >
                 {p.number}
               </text>
@@ -167,8 +178,11 @@ export function Pitch({
             <span className="font-medium">
               #{hover.number} {hover.name}
             </span>
-            <span className="label-xs uppercase font-bold" style={{ color: teamColor(hover) }}>
-              {hover.team || "Player"}
+            <span
+              className="label-xs uppercase font-bold"
+              style={{ color: teamColor(players, hover.team) }}
+            >
+              {teamDisplayName(hover.team, players, teamNames)}
             </span>
           </div>
           <Row k="Position" v={`${hover.x.toFixed(1)}, ${hover.y.toFixed(1)} m`} />
@@ -223,15 +237,19 @@ function Row({ k, v }: { k: string; v: string }) {
   );
 }
 
-export function PitchLegend() {
+export function PitchLegend({ players = [] }: { players?: Player[] }) {
+  const { teamNames } = useSession();
   return (
     <div className="flex flex-wrap items-center gap-4 text-[11px] text-muted-foreground">
-      <span className="flex items-center gap-1.5">
-        <i className="inline-block h-2.5 w-2.5 rounded-full bg-home" /> Home
-      </span>
-      <span className="flex items-center gap-1.5">
-        <i className="inline-block h-2.5 w-2.5 rounded-full bg-away" /> Away
-      </span>
+      {(["home", "away"] as Team[]).map((team) => (
+        <span key={team} className="flex items-center gap-1.5">
+          <i
+            className="inline-block h-2.5 w-2.5 rounded-full"
+            style={{ backgroundColor: teamColor(players, team) }}
+          />
+          {teamDisplayName(team, players, teamNames)}
+        </span>
+      ))}
       <span className="flex items-center gap-1.5">
         <i className="inline-block h-0.5 w-4 bg-primary" /> Top-ranked hypothetical option
       </span>

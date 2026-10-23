@@ -1,8 +1,16 @@
 import { createFileRoute, Link } from "@tanstack/react-router";
 import { Panel, PageHeader, TypeTag } from "@/components/Panel";
 import { Pitch } from "@/components/Pitch";
-import { dist, pressureOn, STATE_FEATURES, supportFor, teamGeometry } from "@/lib/data";
+import {
+  dist,
+  pressureOn,
+  stateFeaturesFor,
+  supportFor,
+  teamColor,
+  teamGeometry,
+} from "@/lib/data";
 import { useSession } from "@/lib/session";
+import { teamDisplayName } from "@/lib/data";
 import { useLivePlayers } from "@/hooks/useGameState";
 import { Video, ArrowRight } from "lucide-react";
 
@@ -26,7 +34,7 @@ export const Route = createFileRoute("/game-state")({
 });
 
 function GameState() {
-  const { matchId, frame, selectedPlayer, setSelectedPlayer } = useSession();
+  const { matchId, frame, selectedPlayer, setSelectedPlayer, teamNames } = useSession();
   const isVideo = matchId.startsWith("uploaded_") || matchId.startsWith("video_");
   const liveState = useLivePlayers(matchId, frame);
   const players = liveState.data ?? [];
@@ -49,6 +57,7 @@ function GameState() {
     );
   const home = teamGeometry(players, "home");
   const away = teamGeometry(players, "away");
+  const stateFeatures = stateFeaturesFor(players, sel);
   const mates = players.filter((p) => p.team === sel.team && p.id !== sel.id);
   const forward = mates
     .filter((m) => (sel.team === "home" ? m.x > sel.x + 3 : m.x < sel.x - 3))
@@ -71,10 +80,16 @@ function GameState() {
             </span>
           </div>
           <div className="flex items-center gap-3">
-            <Link to="/match-explorer" className="text-[11px] font-semibold text-emerald-400 hover:text-emerald-300 underline">
+            <Link
+              to="/match-explorer"
+              className="text-[11px] font-semibold text-emerald-400 hover:text-emerald-300 underline"
+            >
               Match Explorer
             </Link>
-            <Link to="/broadcast" className="text-[11px] font-semibold text-emerald-400 hover:text-emerald-300 underline">
+            <Link
+              to="/broadcast"
+              className="text-[11px] font-semibold text-emerald-400 hover:text-emerald-300 underline"
+            >
               Video Studio
             </Link>
           </div>
@@ -97,7 +112,7 @@ function GameState() {
               </tr>
             </thead>
             <tbody>
-              {STATE_FEATURES.map((f) => (
+              {stateFeatures.map((f) => (
                 <tr key={f.key} className="border-b border-border/60">
                   <td className="py-1.5">{f.label}</td>
                   <td className="num py-1.5 text-right">{f.value}</td>
@@ -123,13 +138,20 @@ function GameState() {
             />
           </Panel>
 
-          <Panel title="Team Geometry" subtitle="Outfield players only">
+          <Panel
+            title="Team Geometry"
+            subtitle="Visible tracked players · goalkeeper roles are not available"
+          >
             <table className="w-full text-[11.5px]">
               <thead>
                 <tr className="border-b border-border text-left">
                   <th className="label-xs py-1.5">Metric</th>
-                  <th className="label-xs py-1.5 text-right">Home</th>
-                  <th className="label-xs py-1.5 text-right">Away</th>
+                  <th className="label-xs py-1.5 text-right">
+                    {teamDisplayName("home", players, teamNames)}
+                  </th>
+                  <th className="label-xs py-1.5 text-right">
+                    {teamDisplayName("away", players, teamNames)}
+                  </th>
                 </tr>
               </thead>
               <tbody>
@@ -143,8 +165,18 @@ function GameState() {
                 ].map(([k, h, a]) => (
                   <tr key={String(k)} className="border-b border-border/60">
                     <td className="py-1.5 text-muted-foreground">{k}</td>
-                    <td className="num py-1.5 text-right text-home">{h}</td>
-                    <td className="num py-1.5 text-right text-away">{a}</td>
+                    <td
+                      className="num py-1.5 text-right"
+                      style={{ color: teamColor(players, "home") }}
+                    >
+                      {h}
+                    </td>
+                    <td
+                      className="num py-1.5 text-right"
+                      style={{ color: teamColor(players, "away") }}
+                    >
+                      {a}
+                    </td>
                   </tr>
                 ))}
               </tbody>

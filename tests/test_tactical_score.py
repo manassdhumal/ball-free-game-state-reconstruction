@@ -57,6 +57,18 @@ class TestTacticalScore(unittest.TestCase):
         # Weights: 0.35 * 0.5 + 0.35 * 0.5 + 0.15 * 0.5 + 0.15 * 1.0 = 0.175 + 0.175 + 0.075 + 0.15 = 0.575
         self.assertAlmostEqual(score, 0.575)
 
+    def test_unknown_forward_options_are_excluded_and_weights_renormalized(self):
+        features = {
+            'possessor_pressure': 0.3,
+            'possessor_support': 3.0,
+            'forward_options': np.nan,
+            'away_compactness_area': 0.4,
+        }
+        self.assertAlmostEqual(
+            calculate_tactical_score(features, possessor_team='home'),
+            1.0,
+        )
+
     def test_away_team_possession(self):
         # When away has possession, we look at home's compactness
         features = {

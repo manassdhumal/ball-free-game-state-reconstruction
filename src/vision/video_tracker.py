@@ -23,7 +23,7 @@ class VideoGameStateTracker:
 
     def __init__(
         self,
-        model_name: str = "yolov8n.pt",
+        model_name: str = "yolo26x.pt",
         homography: PitchHomography | None = None,
         conf_threshold: float = 0.08,
         tracker_config: str | None = None,
@@ -652,4 +652,3 @@ class VideoGameStateTracker:
         dense_df = pd.concat(records, ignore_index=True)
         dense_df = dense_df.sort_values(by=["frame", "team", "player_id"]).reset_index(drop=True)
         return dense_df
-

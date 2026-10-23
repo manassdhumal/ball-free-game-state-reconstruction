@@ -55,6 +55,18 @@ class TestTacticalFeatures(unittest.TestCase):
         # No teammates have x < 0.1
         self.assertEqual(features['forward_options'], 0)
 
+    def test_away_forward_options_use_the_away_team(self):
+        features = extract_tactical_features(
+            self.fg, possessor_id='AWAY_2', home_attacks_x1=True
+        )
+        self.assertEqual(features['forward_options'], 1)
+
+    def test_unknown_attacking_direction_leaves_forward_options_unavailable(self):
+        features = extract_tactical_features(
+            self.fg, possessor_id='HOME_1', home_attacks_x1=None
+        )
+        self.assertTrue(pd.isna(features['forward_options']))
+
     def test_empty_dataframe(self):
         empty_df = pd.DataFrame(columns=['player_id', 'team', 'x', 'y', 'visible'])
         empty_fg = build_frame_graph(empty_df, 1, 0.0)

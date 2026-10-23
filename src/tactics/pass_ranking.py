@@ -23,15 +23,24 @@ def rank_counterfactual_passes(state: pd.DataFrame, model: PassProbabilityModel,
         candidates["decision_score"] = pd.Series(dtype=float)
         return candidates
     candidates = candidates.copy()
-    candidates["pass_completion_probability"] = predict_pass_probability(model, candidates)
+    include_forward_progress = (config or {}).get("include_forward_progress", True)
+    probability_features = candidates
+    if not include_forward_progress:
+        probability_features = candidates.copy()
+        probability_features["forward_progress"] = 0.0
+    candidates["pass_completion_probability"] = predict_pass_probability(model, probability_features)
     weights = {**DEFAULT_WEIGHTS, **dict((config or {}).get("ranking_weights", {}))}
-    candidates["tactical_value"] = (
-        weights["progress"] * np.clip(candidates["forward_progress"] / 0.35, -1, 1)
-        + weights["space"] * np.clip(candidates["target_space"] / 0.30, 0, 1)
+    tactical_value = (
+        weights["space"] * np.clip(candidates["target_space"] / 0.30, 0, 1)
         + weights["support"] * np.clip(candidates["support_count"] / 4, 0, 1)
         - weights["pressure"] * np.clip(1 - candidates["target_pressure"] / 0.30, 0, 1)
         - weights["distance"] * np.clip(candidates["pass_distance"] / 0.70, 0, 1)
     )
+    if include_forward_progress:
+        tactical_value += weights["progress"] * np.clip(
+            candidates["forward_progress"] / 0.35, -1, 1
+        )
+    candidates["tactical_value"] = tactical_value
     candidates["decision_score"] = weights["success"] * candidates["pass_completion_probability"] + candidates["tactical_value"]
     return candidates.sort_values(["decision_score", "target_player_id"], ascending=[False, True]).reset_index(drop=True)
 
