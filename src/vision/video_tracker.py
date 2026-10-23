@@ -314,15 +314,11 @@ class VideoGameStateTracker:
         df: pd.DataFrame,
         total_frames: int,
         fps: float = 25.0,
-        max_interpolation_gap: int = 120,
+        max_interpolation_gap: int = 10,
+        max_stitch_gap: int = 120,
         min_track_observations: int = 8,
     ) -> pd.DataFrame:
-        """Densely complete player trajectories across all frames (0 to total_frames - 1).
-
-        Guarantees that all active outfield players and goalkeepers are visible on the pitch radar
-        in every frame without popping in or disappearing, with butter-smooth continuous movements
-        that match actual gameplay video footage.
-        """
+        """Persist player tracks and interpolate only brief, in-clip occlusions."""
         if df.empty or "player_id" not in df.columns:
             return df
 
@@ -380,7 +376,7 @@ class VideoGameStateTracker:
                     continue
                 gap = st_f - parent_tail["end_f"]
                 # Allow small overlap up to 15 frames or temporal gap up to 120 frames (~4.8 sec)
-                if -15 <= gap <= max_interpolation_gap:
+                if -15 <= gap <= max_stitch_gap:
                     dist_m = float(np.hypot((st_x - parent_tail["end_x"]) * 105.0, (st_y - parent_tail["end_y"]) * 68.0))
                     # Physical running budget: 3.5m base leeway + 7.5m/s sprint speed over temporal gap
                     max_allowed_m = 3.5 + 7.5 * max(0.0, gap / fps)
@@ -450,73 +446,72 @@ class VideoGameStateTracker:
             merged["team"] = team
             merged["timestamp"] = (merged["frame"] / max(fps, 1.0)).round(4)
 
-            # 1. Linear interpolation for internal occlusion gaps
-            merged["x"] = merged["x"].interpolate(method="linear")
-            merged["y"] = merged["y"].interpolate(method="linear")
-            merged["confidence"] = merged["confidence"].interpolate(method="linear")
+            missing_positions = merged["x"].isna()
+            gap_ids = missing_positions.ne(missing_positions.shift()).cumsum()
+            gap_lengths = missing_positions.groupby(gap_ids).transform("sum")
+            can_fill_gap = ~missing_positions | (gap_lengths <= max_interpolation_gap)
+            for column in ("x", "y", "confidence"):
+                merged[column] = merged[column].interpolate(
+                    method="linear", limit_area="inside"
+                ).where(can_fill_gap)
+            merged = merged.dropna(subset=["x", "y"])
+            if merged.empty:
+                continue
 
-            # 2. Backward fill starting position (frame 0 to first detection)
-            merged["x"] = merged["x"].bfill()
-            merged["y"] = merged["y"].bfill()
-            merged["confidence"] = merged["confidence"].bfill().fillna(0.75)
-
-            # 3. Forward fill ending position (last detection to end of clip)
-            merged["x"] = merged["x"].ffill()
-            merged["y"] = merged["y"].ffill()
-            merged["confidence"] = merged["confidence"].ffill().fillna(0.75)
-
+            merged["confidence"] = merged["confidence"].fillna(0.0)
             merged["visible"] = True
+            segment_ids = merged["frame"].diff().fillna(1).gt(1).cumsum()
 
-            # Step 5: Physiological Trajectory Smoothing (Clamp Jumps, SavGol Curves, Zero-Jitter Deadband)
-            x_c = merged["x"].values.copy()
-            y_c = merged["y"].values.copy()
-            n_pts = len(merged)
+            for _, segment in merged.groupby(segment_ids):
+                segment = segment.copy()
+                x_c = segment["x"].values.copy()
+                y_c = segment["y"].values.copy()
+                n_pts = len(segment)
 
             # 1. Clamp physiological speed jumps (> 10.5 m/s)
-            max_step_m = 10.5 / max(fps, 1.0)
-            for i in range(1, n_pts):
-                dx_m = (x_c[i] - x_c[i - 1]) * 105.0
-                dy_m = (y_c[i] - y_c[i - 1]) * 68.0
-                dist_m = float(np.hypot(dx_m, dy_m))
-                if dist_m > max_step_m:
-                    ratio = max_step_m / dist_m
-                    x_c[i] = x_c[i - 1] + (dx_m * ratio) / 105.0
-                    y_c[i] = y_c[i - 1] + (dy_m * ratio) / 68.0
+                max_step_m = 10.5 / max(fps, 1.0)
+                for i in range(1, n_pts):
+                    dx_m = (x_c[i] - x_c[i - 1]) * 105.0
+                    dy_m = (y_c[i] - y_c[i - 1]) * 68.0
+                    dist_m = float(np.hypot(dx_m, dy_m))
+                    if dist_m > max_step_m:
+                        ratio = max_step_m / dist_m
+                        x_c[i] = x_c[i - 1] + (dx_m * ratio) / 105.0
+                        y_c[i] = y_c[i - 1] + (dy_m * ratio) / 68.0
 
             # 2. Savitzky-Golay polynomial trajectory smoothing (w = 11, polyorder = 2)
-            w = min(11, n_pts if n_pts % 2 == 1 else n_pts - 1)
-            if w >= 5:
-                x_smooth = savgol_filter(x_c, window_length=w, polyorder=2)
-                y_smooth = savgol_filter(y_c, window_length=w, polyorder=2)
-            elif n_pts >= 3:
-                x_smooth = np.convolve(x_c, np.ones(3) / 3.0, mode="same")
-                y_smooth = np.convolve(y_c, np.ones(3) / 3.0, mode="same")
-            else:
-                x_smooth = x_c
-                y_smooth = y_c
+                w = min(11, n_pts if n_pts % 2 == 1 else n_pts - 1)
+                if w >= 5:
+                    x_smooth = savgol_filter(x_c, window_length=w, polyorder=2)
+                    y_smooth = savgol_filter(y_c, window_length=w, polyorder=2)
+                elif n_pts >= 3:
+                    x_smooth = np.convolve(x_c, np.ones(3) / 3.0, mode="same")
+                    y_smooth = np.convolve(y_c, np.ones(3) / 3.0, mode="same")
+                else:
+                    x_smooth = x_c
+                    y_smooth = y_c
 
             # 3. Stationary Deadband Anchor (0.35m hysteresis eliminates micro-jitter when standing still)
-            anchor_x = float(x_smooth[0])
-            anchor_y = float(y_smooth[0])
-            x_out = x_smooth.copy()
-            y_out = y_smooth.copy()
-            for i in range(n_pts):
-                dx_m = (x_smooth[i] - anchor_x) * 105.0
-                dy_m = (y_smooth[i] - anchor_y) * 68.0
-                dist_m = float(np.hypot(dx_m, dy_m))
-                if dist_m < 0.35:
-                    x_out[i] = anchor_x
-                    y_out[i] = anchor_y
-                else:
-                    anchor_x = float(x_smooth[i])
-                    anchor_y = float(y_smooth[i])
-                    x_out[i] = anchor_x
-                    y_out[i] = anchor_y
+                anchor_x = float(x_smooth[0])
+                anchor_y = float(y_smooth[0])
+                x_out = x_smooth.copy()
+                y_out = y_smooth.copy()
+                for i in range(n_pts):
+                    dx_m = (x_smooth[i] - anchor_x) * 105.0
+                    dy_m = (y_smooth[i] - anchor_y) * 68.0
+                    dist_m = float(np.hypot(dx_m, dy_m))
+                    if dist_m < 0.35:
+                        x_out[i] = anchor_x
+                        y_out[i] = anchor_y
+                    else:
+                        anchor_x = float(x_smooth[i])
+                        anchor_y = float(y_smooth[i])
+                        x_out[i] = anchor_x
+                        y_out[i] = anchor_y
 
-            merged["x"] = np.clip(x_out, 0.005, 0.995)
-            merged["y"] = np.clip(y_out, 0.005, 0.995)
-
-            records.append(merged)
+                segment["x"] = np.clip(x_out, 0.005, 0.995)
+                segment["y"] = np.clip(y_out, 0.005, 0.995)
+                records.append(segment)
 
         if not records:
             return df

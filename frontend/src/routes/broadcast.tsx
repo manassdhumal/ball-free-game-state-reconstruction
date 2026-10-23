@@ -286,6 +286,7 @@ function VideoReconstructionStudio() {
   useEffect(() => {
     if (!analysisResult) return;
     const matchId = analysisResult.match_id;
+    const effectiveFps = fps / Math.max(1, analysisResult.data.frame_stride ?? 1);
 
     apiFetch<{ frames: Record<string, Array<{ player_id: string; team: string; x: number | null; y: number | null }>> }>(
       `/game-state/${matchId}/all`
@@ -316,7 +317,7 @@ function VideoReconstructionStudio() {
                   const dy = (nextP.y * 68) - curY;
                   const dist = Math.hypot(dx, dy);
                   if (dist > 0.04) {
-                    const vectorLen = Math.min(3.2, Math.max(1.2, dist * 6.5));
+                    const vectorLen = Math.min(9.45, dist * effectiveFps * 0.9);
                     vx = (dx / dist) * vectorLen;
                     vy = (dy / dist) * vectorLen;
                   }
@@ -325,6 +326,13 @@ function VideoReconstructionStudio() {
                 return {
                   id: p.player_id,
                   team: (p.team === "home" || p.team === "away" ? p.team : "home") as "home" | "away",
+                  ...(analysisResult.data.team_colors?.[
+                    p.team === "away" ? "away" : "home"
+                  ] && {
+                    jerseyColor: analysisResult.data.team_colors[
+                      p.team === "away" ? "away" : "home"
+                    ],
+                  }),
                   number: playerNum,
                   name: p.player_id,
                   role: "Field",
@@ -343,7 +351,7 @@ function VideoReconstructionStudio() {
         }
       })
       .catch(() => {});
-  }, [analysisResult]);
+  }, [analysisResult, fps]);
 
   // Load frame tracking data with instant memory lookup
   useEffect(() => {
@@ -367,6 +375,13 @@ function VideoReconstructionStudio() {
             return {
               id: p.player_id,
               team: (p.team === "home" || p.team === "away" ? p.team : "home") as "home" | "away",
+              ...(analysisResult.data.team_colors?.[
+                p.team === "away" ? "away" : "home"
+              ] && {
+                jerseyColor: analysisResult.data.team_colors[
+                  p.team === "away" ? "away" : "home"
+                ],
+              }),
               number: playerNum,
               name: p.player_id,
               role: "Field",

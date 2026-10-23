@@ -26,6 +26,7 @@ export interface VideoProcessResponse {
     duration_sec?: number;
     frame_stride?: number;
     total_video_frames?: number;
+    team_colors?: { home: string; away: string };
     tracking_rows: number;
     tracking_file: string;
     possession_share: { home: number; away: number };

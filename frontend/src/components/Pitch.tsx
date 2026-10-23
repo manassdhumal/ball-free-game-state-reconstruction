@@ -31,6 +31,8 @@ export function Pitch({
 }) {
   const [hover, setHover] = useState<Player | null>(null);
   const byId = (id: string) => players.find((p) => p.id === id);
+  const teamColor = (player: Player) =>
+    player.jerseyColor ?? (player.team === "home" ? "var(--home)" : "var(--away)");
 
   const lineStroke = "rgba(255,255,255,0.22)";
 
@@ -50,7 +52,7 @@ export function Pitch({
                 cx={p.x}
                 cy={p.y}
                 r={9}
-                fill={p.team === "home" ? "var(--home)" : "var(--away)"}
+                fill={teamColor(p)}
                 opacity={0.14}
               />
             ))}
@@ -117,7 +119,7 @@ export function Pitch({
                 y1={p.y}
                 x2={p.x + p.vx}
                 y2={p.y + p.vy}
-                stroke={p.team === "home" ? "var(--home)" : "var(--away)"}
+                stroke={teamColor(p)}
                 strokeWidth={0.32}
                 strokeLinecap="round"
                 opacity={0.9}
@@ -139,7 +141,7 @@ export function Pitch({
                 cx={p.x}
                 cy={p.y}
                 r={selected ? 2.4 : 2}
-                fill={p.team === "home" ? "var(--home)" : "var(--away)"}
+                fill={teamColor(p)}
                 stroke={selected ? "var(--primary)" : "rgba(0,0,0,0.55)"}
                 strokeWidth={selected ? 0.6 : 0.22}
                 style={{ transition: "cx 45ms linear, cy 45ms linear" }}

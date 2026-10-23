@@ -125,7 +125,7 @@ class JerseyClassifier:
         if not player_samples_map:
             return
 
-        unique_players = list(player_samples_map.keys())
+        unique_players = sorted(player_samples_map)
         if len(unique_players) < 2:
             single_rgb = np.median(player_samples_map[unique_players[0]], axis=0)
             self.team_colors[self.team_names[0]] = single_rgb
@@ -154,6 +154,7 @@ class JerseyClassifier:
         # Cluster into 3 if we have >= 5 players to isolate referee/goalkeeper outliers
         k_clusters = 3 if len(unique_players) >= 5 else 2
         k_clusters = min(k_clusters, len(unique_players))
+        cv2.setRNGSeed(0)
         _, labels, centers = cv2.kmeans(
             player_labs, k_clusters, None, criteria, 10, cv2.KMEANS_PP_CENTERS
         )
@@ -172,6 +173,9 @@ class JerseyClassifier:
 
         c0_rgb = np.median(player_rgbs[c0_players_mask], axis=0) if np.any(c0_players_mask) else player_rgbs[0]
         c1_rgb = np.median(player_rgbs[c1_players_mask], axis=0) if np.any(c1_players_mask) else player_rgbs[-1]
+
+        if tuple(c1_rgb.tolist()) < tuple(c0_rgb.tolist()):
+            c0_rgb, c1_rgb = c1_rgb, c0_rgb
 
         self.team_colors[self.team_names[0]] = c0_rgb
         self.team_colors[self.team_names[1]] = c1_rgb
@@ -228,16 +232,14 @@ class JerseyClassifier:
             return self._player_team_cache[pid_str]
 
         if not self._fitted or color is None:
-            team = self.team_names[hash(pid_str) % 2]
+            team = self.team_names[0]
             self._player_team_cache[pid_str] = team
             return team
 
         color_lab = self._rgb_to_lab(color)
         dist_0 = float(np.linalg.norm(color_lab - self._team_lab_centers[self.team_names[0]]))
         dist_1 = float(np.linalg.norm(color_lab - self._team_lab_centers[self.team_names[1]]))
-        min_dist = min(dist_0, dist_1)
-
-        if min_dist >= 18.0 or self.is_referee(pid_str, color):
+        if self.is_referee(pid_str, color):
             self._referee_ids.add(pid_str)
             self._player_team_cache[pid_str] = "referee"
             return "referee"

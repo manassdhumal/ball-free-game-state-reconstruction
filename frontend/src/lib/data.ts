@@ -5,6 +5,7 @@ export type Team = "home" | "away";
 export interface Player {
   id: string;
   team: Team;
+  jerseyColor?: string;
   number: number;
   name: string;
   role: string;
