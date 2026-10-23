@@ -110,16 +110,19 @@ export function Pitch({
         {/* velocity vectors */}
         {showVectors &&
           players.map((p) => (
-            <line
-              key={`v-${p.id}`}
-              x1={p.x}
-              y1={p.y}
-              x2={p.x + p.vx * 0.9}
-              y2={p.y + p.vy * 0.9}
-              stroke={p.team === "home" ? "var(--home)" : "var(--away)"}
-              strokeWidth={0.28}
-              opacity={0.85}
-            />
+            (p.vx !== 0 || p.vy !== 0) ? (
+              <line
+                key={`v-${p.id}`}
+                x1={p.x}
+                y1={p.y}
+                x2={p.x + p.vx}
+                y2={p.y + p.vy}
+                stroke={p.team === "home" ? "var(--home)" : "var(--away)"}
+                strokeWidth={0.32}
+                strokeLinecap="round"
+                opacity={0.9}
+              />
+            ) : null
           ))}
 
         {players.map((p) => {
@@ -139,6 +142,7 @@ export function Pitch({
                 fill={p.team === "home" ? "var(--home)" : "var(--away)"}
                 stroke={selected ? "var(--primary)" : "rgba(0,0,0,0.55)"}
                 strokeWidth={selected ? 0.6 : 0.22}
+                style={{ transition: "cx 45ms linear, cy 45ms linear" }}
               />
               <text
                 x={p.x}
@@ -146,7 +150,7 @@ export function Pitch({
                 fontSize={2.1}
                 textAnchor="middle"
                 fill="rgba(255,255,255,0.92)"
-                style={{ pointerEvents: "none", fontVariantNumeric: "tabular-nums" }}
+                style={{ pointerEvents: "none", fontVariantNumeric: "tabular-nums", transition: "x 45ms linear, y 45ms linear" }}
               >
                 {p.number}
               </text>

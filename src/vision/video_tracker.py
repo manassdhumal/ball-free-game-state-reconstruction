@@ -314,13 +314,14 @@ class VideoGameStateTracker:
         df: pd.DataFrame,
         total_frames: int,
         fps: float = 25.0,
-        max_interpolation_gap: int = 40,
-        min_track_observations: int = 2,
+        max_interpolation_gap: int = 120,
+        min_track_observations: int = 8,
     ) -> pd.DataFrame:
-        """Densely complete player trajectories across intermediate frames and smooth movements.
+        """Densely complete player trajectories across all frames (0 to total_frames - 1).
 
-        Guarantees that all active outfield players and goalkeepers move smoothly and continuously
-        matching video gameplay footage, while eliminating outside linesmen and transient artifacts.
+        Guarantees that all active outfield players and goalkeepers are visible on the pitch radar
+        in every frame without popping in or disappearing, with butter-smooth continuous movements
+        that match actual gameplay video footage.
         """
         if df.empty or "player_id" not in df.columns:
             return df
@@ -330,16 +331,17 @@ class VideoGameStateTracker:
 
         match_id = df["match_id"].iloc[0] if "match_id" in df.columns else "match"
 
-        # Step 1: Filter outside line referees (linesmen / officials along near or far touchline)
+        # Step 1: Filter outside touchline / goal-line officials and linesmen
         track_summaries = []
         for player_id, p_df in df.groupby("player_id", as_index=False):
             p_df = p_df.sort_values("frame").reset_index(drop=True)
-            if len(p_df) < min_track_observations:
+            if len(p_df) < 2:
                 continue
 
-            # Outside line referee rejection: linesmen stand strictly on or beyond the touchlines
+            # Outside line referee rejection: officials stand strictly on or beyond the touchlines
             med_y = float(p_df["y"].median())
-            if med_y >= 0.965 or med_y <= 0.035:
+            med_x = float(p_df["x"].median())
+            if med_y >= 0.965 or med_y <= 0.035 or med_x >= 0.985 or med_x <= 0.015:
                 continue
 
             track_summaries.append({
@@ -351,13 +353,14 @@ class VideoGameStateTracker:
                 "start_y": float(p_df["y"].iloc[0]),
                 "end_x": float(p_df["x"].iloc[-1]),
                 "end_y": float(p_df["y"].iloc[-1]),
+                "count": len(p_df),
                 "df": p_df,
             })
 
         if not track_summaries:
             return df
 
-        # Step 2: Spatio-temporal tracklet association (stitch split tracks of the same player)
+        # Step 2: Temporal & Overlap Spatio-temporal Tracklet Association (Multi-Pass Stitching)
         track_summaries.sort(key=lambda t: t["start_f"])
         id_mapping: Dict[str, str] = {}
         active_tails: Dict[str, Dict[str, Any]] = {}
@@ -376,12 +379,13 @@ class VideoGameStateTracker:
                 if parent_tail["team"] != team:
                     continue
                 gap = st_f - parent_tail["end_f"]
-                if 1 <= gap <= 40:
-                    dist = float(np.hypot(st_x - parent_tail["end_x"], st_y - parent_tail["end_y"]))
-                    # Maximum physically realistic movement window on pitch (~8-9m/s)
-                    max_allowed = 0.03 + 0.0025 * gap
-                    if dist <= max_allowed and dist < min_dist:
-                        min_dist = dist
+                # Allow small overlap up to 15 frames or temporal gap up to 120 frames (~4.8 sec)
+                if -15 <= gap <= max_interpolation_gap:
+                    dist_m = float(np.hypot((st_x - parent_tail["end_x"]) * 105.0, (st_y - parent_tail["end_y"]) * 68.0))
+                    # Physical running budget: 3.5m base leeway + 7.5m/s sprint speed over temporal gap
+                    max_allowed_m = 3.5 + 7.5 * max(0.0, gap / fps)
+                    if dist_m <= max_allowed_m and dist_m < min_dist:
+                        min_dist = dist_m
                         best_parent = parent_id
 
             if best_parent is not None:
@@ -406,37 +410,64 @@ class VideoGameStateTracker:
             p_df["player_id"] = canonical_id
             stitched_dfs[canonical_id].append(p_df)
 
-        # Step 3: Interpolate within active spans and apply polynomial smoothing
-        records: List[pd.DataFrame] = []
+        # Step 3: Noise Filtering & Genuine Squad Selection (Max 11 per Team)
+        genuine_players: Dict[str, pd.DataFrame] = {}
         for canonical_id, chunks in stitched_dfs.items():
             combined = pd.concat(chunks, ignore_index=True)
             combined = combined.drop_duplicates(subset=["frame"]).sort_values("frame").reset_index(drop=True)
-            if len(combined) < min_track_observations:
-                continue
+            if len(combined) >= min_track_observations:
+                genuine_players[canonical_id] = combined
 
+        # If a team has more than 11 candidate tracks, keep the top 11 by observation density
+        team_groups: Dict[str, List[tuple[str, pd.DataFrame, float]]] = defaultdict(list)
+        for canonical_id, combined in genuine_players.items():
             team = combined["team"].iloc[0]
-            first_f = int(combined["frame"].min())
-            last_f = int(combined["frame"].max())
+            score = len(combined) * float(combined["confidence"].mean())
+            team_groups[team].append((canonical_id, combined, score))
 
-            # Reindex to continuous frame span
-            full_frames = pd.DataFrame({"frame": range(first_f, last_f + 1)})
-            merged = pd.merge(full_frames, combined, on="frame", how="left")
+        final_players: Dict[str, pd.DataFrame] = {}
+        for team, p_list in team_groups.items():
+            p_list.sort(key=lambda item: item[2], reverse=True)
+            for item in p_list[:11]:  # Enforce genuine football squad limit (max 11 per team)
+                final_players[item[0]] = item[1]
 
+        if not final_players:
+            # Fallback if all tracks were filtered
+            for canonical_id, chunks in stitched_dfs.items():
+                final_players[canonical_id] = pd.concat(chunks, ignore_index=True)
+
+        # Step 4: Densely Persist ALL Established Players Across ALL Frames (0 .. total_span - 1)
+        total_span = max(total_frames, int(df["frame"].max() + 1))
+        all_frames_df = pd.DataFrame({"frame": range(total_span)})
+
+        records: List[pd.DataFrame] = []
+        for canonical_id, combined in final_players.items():
+            team = combined["team"].iloc[0]
+
+            merged = pd.merge(all_frames_df, combined, on="frame", how="left")
             merged["match_id"] = match_id
             merged["player_id"] = canonical_id
             merged["team"] = team
-            merged["x"] = merged["x"].interpolate(method="linear", limit=max_interpolation_gap)
-            merged["y"] = merged["y"].interpolate(method="linear", limit=max_interpolation_gap)
-            merged["confidence"] = merged["confidence"].interpolate(method="linear").fillna(0.75)
-            merged["visible"] = merged["x"].notna()
             merged["timestamp"] = (merged["frame"] / max(fps, 1.0)).round(4)
 
-            # Drop any lingering NaN coordinates beyond max interpolation gap
-            merged = merged.dropna(subset=["x", "y"]).reset_index(drop=True)
-            if len(merged) < min_track_observations:
-                continue
+            # 1. Linear interpolation for internal occlusion gaps
+            merged["x"] = merged["x"].interpolate(method="linear")
+            merged["y"] = merged["y"].interpolate(method="linear")
+            merged["confidence"] = merged["confidence"].interpolate(method="linear")
 
-            # Physiological trajectory smoothing: clamp teleport jumps, smooth curves, anchor stationary players
+            # 2. Backward fill starting position (frame 0 to first detection)
+            merged["x"] = merged["x"].bfill()
+            merged["y"] = merged["y"].bfill()
+            merged["confidence"] = merged["confidence"].bfill().fillna(0.75)
+
+            # 3. Forward fill ending position (last detection to end of clip)
+            merged["x"] = merged["x"].ffill()
+            merged["y"] = merged["y"].ffill()
+            merged["confidence"] = merged["confidence"].ffill().fillna(0.75)
+
+            merged["visible"] = True
+
+            # Step 5: Physiological Trajectory Smoothing (Clamp Jumps, SavGol Curves, Zero-Jitter Deadband)
             x_c = merged["x"].values.copy()
             y_c = merged["y"].values.copy()
             n_pts = len(merged)
@@ -452,8 +483,8 @@ class VideoGameStateTracker:
                     x_c[i] = x_c[i - 1] + (dx_m * ratio) / 105.0
                     y_c[i] = y_c[i - 1] + (dy_m * ratio) / 68.0
 
-            # 2. Savitzky-Golay polynomial trajectory smoothing
-            w = min(9, n_pts if n_pts % 2 == 1 else n_pts - 1)
+            # 2. Savitzky-Golay polynomial trajectory smoothing (w = 11, polyorder = 2)
+            w = min(11, n_pts if n_pts % 2 == 1 else n_pts - 1)
             if w >= 5:
                 x_smooth = savgol_filter(x_c, window_length=w, polyorder=2)
                 y_smooth = savgol_filter(y_c, window_length=w, polyorder=2)
@@ -492,7 +523,7 @@ class VideoGameStateTracker:
 
         dense_df = pd.concat(records, ignore_index=True)
 
-        # Step 4: Canonicalize player numbers per team (Home 1..N, Away 1..N sorted by pitch depth X)
+        # Step 6: Canonicalize player numbers per team (Home 1..N, Away 1..N sorted by pitch depth X)
         # Gives permanent, standard football jersey numbers (e.g. GK=1, Defenders=2..5, Midfielders=6..8, Forwards=9..11)
         id_map = {}
         for team, group in dense_df.groupby("team"):

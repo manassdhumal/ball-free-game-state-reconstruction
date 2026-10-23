@@ -312,11 +312,13 @@ function VideoReconstructionStudio() {
                 let vy = 0;
                 const nextP = nextMap.get(p.player_id);
                 if (nextP && nextP.x !== null && nextP.y !== null) {
-                  vx = ((nextP.x * 105) - curX) * 0.9;
-                  vy = ((nextP.y * 68) - curY) * 0.9;
-                  if (Math.hypot(vx, vy) < 0.20) {
-                    vx = 0;
-                    vy = 0;
+                  const dx = (nextP.x * 105) - curX;
+                  const dy = (nextP.y * 68) - curY;
+                  const dist = Math.hypot(dx, dy);
+                  if (dist > 0.04) {
+                    const vectorLen = Math.min(3.2, Math.max(1.2, dist * 6.5));
+                    vx = (dx / dist) * vectorLen;
+                    vy = (dy / dist) * vectorLen;
                   }
                 }
 
