@@ -18,6 +18,7 @@ const numberValue = (row: Row, key: string) => {
 
 function PossessionPage() {
   const { matchId, frame } = useSession();
+  const isVideo = matchId.startsWith("uploaded_") || matchId.startsWith("video_");
   const possession = useLivePossession(matchId, frame);
   const events = useQuery({ queryKey: ["events", matchId], queryFn: () => getEvents(matchId) });
   const metrics = useQuery({
@@ -105,13 +106,15 @@ function PossessionPage() {
         </Panel>
 
         <Panel
-          title="Ground Truth / Annotated Events"
-          subtitle="Raw Metrica annotations. Predicted events are not currently exposed by the API."
+          title={isVideo ? "Inferred Tactical Events" : "Ground Truth / Annotated Events"}
+          subtitle={isVideo ? `AI-detected passes, ball lost, and recovery transitions for ${matchId}` : "Raw Metrica annotations. Predicted events are not currently exposed by the API."}
         >
           {events.isLoading ? (
             <div className="text-sm text-muted-foreground">Loading…</div>
           ) : events.isError ? (
             <div className="text-sm text-destructive">Backend unavailable</div>
+          ) : eventRows.length === 0 ? (
+            <div className="text-sm text-muted-foreground p-3 text-center">No events detected for this sequence yet.</div>
           ) : (
             <div className="max-h-72 overflow-auto">
               <table className="w-full text-[11.5px]">
@@ -126,15 +129,15 @@ function PossessionPage() {
                 <tbody>
                   {eventRows.slice(0, 80).map((event, index) => (
                     <tr
-                      key={`${String(event.event_id)}-${index}`}
+                      key={`${String(event.event_id ?? index)}-${index}`}
                       className="border-b border-border/60"
                     >
-                      <td className="num py-1.5">{String(event.start_frame)}</td>
+                      <td className="num py-1.5">{String(event.start_frame ?? event.frame ?? "—")}</td>
                       <td className="num py-1.5">
-                        {numberValue(event, "start_timestamp").toFixed(2)}
+                        {(numberValue(event, "start_timestamp") || numberValue(event, "timestamp")).toFixed(2)}s
                       </td>
-                      <td className="py-1.5">{String(event.event_type)}</td>
-                      <td className="py-1.5">{String(event.team)}</td>
+                      <td className="py-1.5 font-semibold text-emerald-400">{String(event.event_type ?? event.type ?? "—")}</td>
+                      <td className="py-1.5 uppercase text-[10.5px]">{String(event.team ?? "—")}</td>
                     </tr>
                   ))}
                 </tbody>

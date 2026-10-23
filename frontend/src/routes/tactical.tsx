@@ -1,9 +1,10 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { Metric, Panel, PageHeader } from "@/components/Panel";
 import { BarSeries, LineSeries, ScatterSeries } from "@/components/Charts";
 import { localDensity, pressureOn, supportFor, teamGeometry } from "@/lib/data";
 import { useLivePlayers, useLiveTactical } from "@/hooks/useGameState";
 import { useSession } from "@/lib/session";
+import { Video, ArrowRight } from "lucide-react";
 
 export const Route = createFileRoute("/tactical")({
   head: () => ({
@@ -25,9 +26,11 @@ export const Route = createFileRoute("/tactical")({
 });
 
 function Tactical() {
-  const { matchId, frame } = useSession();
+  const { matchId, frame, dataset } = useSession();
   const livePlayers = useLivePlayers(matchId, frame);
   const tactical = useLiveTactical(matchId, frame);
+  const isVideo = matchId.startsWith("uploaded_") || matchId.startsWith("video_");
+
   if (livePlayers.isLoading || tactical.isLoading)
     return (
       <PageHeader title="Tactical Analysis" description="Loading current-frame tactical state…" />
@@ -44,7 +47,9 @@ function Tactical() {
   const away = teamGeometry(players, "away");
 
   const series = Array.from({ length: 40 }, (_, i) => {
-    const f = frame - 780 + i * 20;
+    const f = isVideo 
+      ? Math.max(0, Math.floor(frame / 20) * 20 - 400 + i * 20)
+      : frame - 780 + i * 20;
     const h = home;
     const a = away;
     return {

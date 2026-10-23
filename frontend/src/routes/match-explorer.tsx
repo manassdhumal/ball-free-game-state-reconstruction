@@ -1,8 +1,7 @@
-import { createFileRoute } from "@tanstack/react-router";
-import { useEffect } from "react";
-import { useState } from "react";
+import { createFileRoute, Link } from "@tanstack/react-router";
+import { useEffect, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Pause, Play, SkipBack, SkipForward } from "lucide-react";
+import { Pause, Play, SkipBack, SkipForward, Video, ArrowRight, Activity } from "lucide-react";
 import { Panel, PageHeader } from "@/components/Panel";
 import { Pitch, PitchLegend } from "@/components/Pitch";
 import {
@@ -19,6 +18,7 @@ import {
 import { useSession } from "@/lib/session";
 import { useLivePlayers } from "@/hooks/useGameState";
 import { getMatches } from "@/api/matches";
+import { getEvents } from "@/api/events";
 
 export const Route = createFileRoute("/match-explorer")({
   head: () => ({
@@ -77,6 +77,75 @@ function MatchExplorer() {
   const windowStart = isVideo ? 0 : 1000;
   const windowEnd = isVideo ? maxMatchFrames : 1500;
 
+  // Real events query for match
+  const eventsQuery = useQuery({
+    queryKey: ["events", matchId],
+    queryFn: () => getEvents(matchId),
+    staleTime: 30_000,
+  });
+
+  const rawEvents = (eventsQuery.data?.data as Array<Record<string, any>> | undefined) ?? [];
+
+  const videoEvents = useMemo(() => {
+    if (!isVideo || rawEvents.length === 0) return [];
+    return rawEvents
+      .map((e, idx) => ({
+        frame: Number(e.frame ?? e.start_frame ?? 0),
+        type: String(e.type ?? e.event_type ?? "EVENT"),
+        team: String(e.team ?? "home").toLowerCase(),
+        player_id: String(e.player_id ?? ""),
+        timestamp: Number(e.timestamp ?? e.start_timestamp ?? 0),
+      }))
+      .sort((a, b) => a.frame - b.frame);
+  }, [isVideo, rawEvents]);
+
+  const activeEvents = useMemo(() => {
+    if (isVideo) {
+      return videoEvents.map((e) => ({
+        frame: e.frame,
+        annotated: e.type,
+        predicted: e.type,
+        team: e.team,
+      }));
+    }
+    return EVENTS;
+  }, [isVideo, videoEvents]);
+
+  const activePossessionSegments = useMemo(() => {
+    if (!isVideo) {
+      return POSSESSION_SEGMENTS.filter((s) => s.end > windowStart && s.start < windowEnd);
+    }
+    if (videoEvents.length === 0) {
+      return [{ start: 0, end: windowEnd, team: "home" as const, confidence: 0.85 }];
+    }
+    const segs: Array<{ start: number; end: number; team: "home" | "away" | "uncontested"; confidence: number }> = [];
+    let curStart = 0;
+    let curTeam: "home" | "away" = videoEvents[0].team === "away" ? "away" : "home";
+
+    for (let i = 0; i < videoEvents.length; i++) {
+      const ev = videoEvents[i];
+      if (ev.team !== curTeam && ev.frame > curStart) {
+        segs.push({
+          start: curStart,
+          end: ev.frame,
+          team: curTeam,
+          confidence: 0.88,
+        });
+        curStart = ev.frame;
+        curTeam = ev.team === "away" ? "away" : "home";
+      }
+    }
+    if (curStart < windowEnd) {
+      segs.push({
+        start: curStart,
+        end: windowEnd,
+        team: curTeam,
+        confidence: 0.88,
+      });
+    }
+    return segs;
+  }, [isVideo, videoEvents, windowStart, windowEnd]);
+
   useEffect(() => {
     if (!playing) return;
     const id = setInterval(
@@ -96,6 +165,25 @@ function MatchExplorer() {
         description="Inspect the raw player-only tracking stream frame by frame. Possession bands are inferred, not annotated — see Possession & Events for evaluation against ground truth."
       />
 
+      {/* Reconstructed Video Match Indicator Banner */}
+      {isVideo && (
+        <div className="mb-3.5 flex flex-wrap items-center justify-between gap-2 border border-emerald-500/40 bg-emerald-500/10 px-3.5 py-2 rounded text-xs">
+          <div className="flex items-center gap-2 text-emerald-400">
+            <Video className="h-4 w-4 shrink-0" />
+            <span>
+              <strong>Perception Video Active:</strong> {currentMatch?.label || matchId} ({maxMatchFrames} frames reconstructed)
+            </span>
+          </div>
+          <Link
+            to="/broadcast"
+            className="flex items-center gap-1 text-[11px] font-semibold text-emerald-400 hover:text-emerald-300 underline"
+          >
+            <span>Open in Video Studio</span>
+            <ArrowRight className="h-3 w-3" />
+          </Link>
+        </div>
+      )}
+
       <Panel className="mb-4" bodyClassName="p-2.5">
         <div className="flex flex-wrap items-center gap-3">
           <select
@@ -103,12 +191,13 @@ function MatchExplorer() {
             onChange={(e) => {
               const selected = availableMatches.find((m) => m.match_id === e.target.value);
               if (selected) {
+                const isNewVideo = selected.match_id.startsWith("uploaded_") || selected.match_id.startsWith("video_");
                 setMatchId(selected.match_id);
                 setDataset(selected.label);
-                setFrame(isVideo ? 0 : 1250);
+                setFrame(isNewVideo ? 0 : 1250);
               }
             }}
-            className="border border-input bg-panel-alt px-2 py-1 text-[12px]"
+            className="border border-input bg-panel-alt px-2 py-1 text-[12px] font-medium"
           >
             {availableMatches.map((m) => (
               <option key={m.match_id} value={m.match_id}>
@@ -119,7 +208,7 @@ function MatchExplorer() {
 
           <div className="flex items-center gap-1">
             <button
-              onClick={() => setFrame(Math.max(0, frame - 1))}
+              onClick={() => setFrame(Math.max(windowStart, frame - 1))}
               className="border border-border p-1.5 hover:bg-muted"
               aria-label="Previous frame"
             >
@@ -133,7 +222,7 @@ function MatchExplorer() {
               {playing ? <Pause className="h-3.5 w-3.5" /> : <Play className="h-3.5 w-3.5" />}
             </button>
             <button
-              onClick={() => setFrame(frame + 1)}
+              onClick={() => setFrame(Math.min(windowEnd, frame + 1))}
               className="border border-border p-1.5 hover:bg-muted"
               aria-label="Next frame"
             >
@@ -192,41 +281,44 @@ function MatchExplorer() {
 
           <Panel
             title="Timeline"
-            subtitle="Frames 1000–1500 · inferred possession bands and event markers"
+            subtitle={
+              isVideo 
+                ? `Frames ${windowStart}–${windowEnd} · Inferred possession & tactical event markers for ${currentMatch?.label || matchId}`
+                : "Frames 1000–1500 · inferred possession bands and event markers"
+            }
           >
             <div className="relative h-7 w-full border border-border bg-panel-alt">
-              {POSSESSION_SEGMENTS.filter((s) => s.end > windowStart && s.start < windowEnd).map(
-                (s) => (
-                  <div
-                    key={s.start}
-                    className="absolute top-0 h-full"
-                    style={{
-                      left: `${Math.max(0, pct(s.start))}%`,
-                      width: `${Math.min(100, pct(s.end)) - Math.max(0, pct(s.start))}%`,
-                      background:
-                        s.team === "home"
-                          ? "var(--home)"
-                          : s.team === "away"
-                            ? "var(--away)"
-                            : "var(--muted)",
-                      opacity: 0.55,
-                    }}
-                    title={`${s.team} · confidence ${s.confidence}`}
-                  />
-                ),
-              )}
+              {activePossessionSegments.map((s, idx) => (
+                <div
+                  key={`${s.start}-${idx}`}
+                  className="absolute top-0 h-full"
+                  style={{
+                    left: `${Math.max(0, pct(s.start))}%`,
+                    width: `${Math.min(100, pct(s.end)) - Math.max(0, pct(s.start))}%`,
+                    background:
+                      s.team === "home"
+                        ? "var(--home)"
+                        : s.team === "away"
+                          ? "var(--away)"
+                          : "var(--muted)",
+                    opacity: 0.55,
+                  }}
+                  title={`${s.team} · confidence ${s.confidence}`}
+                />
+              ))}
               <div
                 className="absolute top-0 h-full w-px bg-primary"
                 style={{ left: `${Math.min(100, Math.max(0, pct(frame)))}%` }}
               />
             </div>
             <div className="relative mt-1 h-8">
-              {EVENTS.map((e) => (
+              {activeEvents.map((e, idx) => (
                 <button
-                  key={e.frame}
+                  key={`${e.frame}-${idx}`}
                   onClick={() => setFrame(e.frame)}
-                  className="absolute -translate-x-1/2 text-[10px] text-muted-foreground hover:text-foreground"
+                  className="absolute -translate-x-1/2 text-[10px] text-muted-foreground hover:text-foreground cursor-pointer"
                   style={{ left: `${pct(e.frame)}%` }}
+                  title={`Frame ${e.frame}: ${e.predicted || e.annotated}`}
                 >
                   <span className="mx-auto block h-2 w-px bg-border" />
                   {e.predicted !== "—" ? e.predicted : e.annotated}

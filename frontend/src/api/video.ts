@@ -123,3 +123,34 @@ export function getVideoStatus(videoId: string): Promise<VideoStatusResponse> {
 export function getVideoStreamUrl(videoId: string): string {
   return `${apiBaseUrl}/video/stream/${videoId}`;
 }
+
+export interface StoredVideo {
+  video_id: string;
+  filename: string;
+  size_bytes: number;
+  total_frames?: number;
+  fps?: number;
+  width?: number;
+  height?: number;
+  duration_sec?: number;
+  upload_time?: string;
+  processed: boolean;
+  match_id: string;
+  tracking_csv_exists: boolean;
+  summary?: any;
+}
+
+export function getStoredVideos(): Promise<{ status: string; count: number; videos: StoredVideo[] }> {
+  return apiFetch<{ status: string; count: number; videos: StoredVideo[] }>("/video/stored");
+}
+
+export function getStoredVideoResult(videoId: string): Promise<VideoProcessResponse> {
+  return apiFetch<VideoProcessResponse>(`/video/result/${videoId}`);
+}
+
+export function deleteStoredVideo(videoId: string): Promise<{ status: string; video_id: string }> {
+  return apiFetch<{ status: string; video_id: string }>(`/video/${videoId}`, {
+    method: "DELETE",
+  });
+}
+

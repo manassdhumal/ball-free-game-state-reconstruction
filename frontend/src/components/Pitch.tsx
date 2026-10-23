@@ -167,7 +167,9 @@ export function Pitch({
             <span className="font-medium">
               #{hover.number} {hover.name}
             </span>
-            <span className="label-xs">{hover.team === "home" ? "HOME" : "AWAY"}</span>
+            <span className="label-xs uppercase font-bold" style={{ color: teamColor(hover) }}>
+              {hover.team || "Player"}
+            </span>
           </div>
           <Row k="Position" v={`${hover.x.toFixed(1)}, ${hover.y.toFixed(1)} m`} />
           <Row

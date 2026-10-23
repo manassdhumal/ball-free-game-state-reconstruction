@@ -400,14 +400,123 @@ class PitchMarkingDetector:
                     v_top = 0.14 * h
                     v_bot = 0.90 * h
 
-        u_center = w / 2.0
-        # Broadcast cameras view pitch with trapezoidal perspective foreshortening
-        top_left_u = max(0.04 * w, u_center - (u_center - 0.04 * w) * 0.88)
-        top_right_u = min(0.96 * w, u_center + (0.96 * w - u_center) * 0.88)
-        bot_left_u = 0.02 * w
-        bot_right_u = 0.98 * w
-
         return None, None
+
+    @classmethod
+    def detect_pitch_boundaries_and_angles(
+        cls,
+        frame: np.ndarray,
+        white_line_mask: np.ndarray,
+        pitch_contour: Optional[np.ndarray],
+    ) -> Dict[str, Any]:
+        """Measure pitch line angles, perspective convergence, and horizontal/vertical pitch boundaries.
+
+        Filters out managers, bench substitutes, linesmen, and spectators who stand outside the playing lines.
+        """
+        h, w = frame.shape[:2]
+        edges = cv2.Canny(white_line_mask, 50, 150)
+        lines = cv2.HoughLinesP(
+            edges, 1, np.pi / 180, threshold=30,
+            minLineLength=max(25, int(min(w, h) * 0.08)), maxLineGap=25
+        )
+
+        top_candidates = []
+        bot_candidates = []
+        transverse_angles = []
+        transverse_lines = []
+
+        if lines is not None:
+            for l in lines:
+                x1, y1, x2, y2 = l.flatten()
+                dx = x2 - x1
+                dy = y2 - y1
+                length = float(np.hypot(dx, dy))
+                angle = float(np.abs(np.arctan2(dy, dx) * 180.0 / np.pi))
+
+                # Longitudinal lines: parallel to touchlines (near-horizontal)
+                if angle <= 25.0 or angle >= 155.0:
+                    y_mid = (y1 + y2) / 2.0
+                    if y_mid <= 0.48 * h:
+                        top_candidates.append((y_mid, length))
+                    elif y_mid >= 0.52 * h:
+                        bot_candidates.append((y_mid, length))
+
+                # Transverse lines: perpendicular to touchlines (halfway, penalty box, goal line)
+                elif 62.0 <= angle <= 118.0:
+                    transverse_angles.append(angle)
+                    transverse_lines.append(((x1, y1), (x2, y2), length))
+
+        # Determine touchline limits in image space
+        v_top = 0.12 * h
+        v_bot = 0.92 * h
+        if top_candidates:
+            top_candidates.sort(key=lambda item: item[1], reverse=True)
+            v_top = float(np.median([item[0] for item in top_candidates[:5]]))
+        if bot_candidates:
+            bot_candidates.sort(key=lambda item: item[1], reverse=True)
+            v_bot = float(np.median([item[0] for item in bot_candidates[:5]]))
+
+        if (v_bot - v_top) < 0.38 * h:
+            v_top = 0.12 * h
+            v_bot = 0.92 * h
+
+        # Calculate camera tilt and perspective inclination angle
+        mean_transverse_angle = float(np.median(transverse_angles)) if transverse_angles else 90.0
+        pitch_inclination = abs(90.0 - mean_transverse_angle)
+
+        # Estimate perspective vanishing line / point if converging transverse lines exist
+        vanishing_y = -float(h) * 1.5
+        if len(transverse_lines) >= 2:
+            try:
+                # Find intersection of transverse lines
+                p1a, p1b, _ = transverse_lines[0]
+                p2a, p2b, _ = transverse_lines[-1]
+                # Line 1: A1 u + B1 v = C1
+                A1 = p1b[1] - p1a[1]
+                B1 = p1a[0] - p1b[0]
+                C1 = A1 * p1a[0] + B1 * p1a[1]
+                # Line 2: A2 u + B2 v = C2
+                A2 = p2b[1] - p2a[1]
+                B2 = p2a[0] - p2b[0]
+                C2 = A2 * p2a[0] + B2 * p2a[1]
+                det = A1 * B2 - A2 * B1
+                if abs(det) > 1e-5:
+                    vanishing_y = float((A1 * C2 - A2 * C1) / det)
+            except Exception:
+                pass
+
+        return {
+            "top_touchline_v": float(v_top),
+            "bottom_touchline_v": float(v_bot),
+            "pitch_inclination_deg": float(round(pitch_inclination, 2)),
+            "transverse_angle_deg": float(round(mean_transverse_angle, 2)),
+            "vanishing_y": float(round(vanishing_y, 2)),
+            "has_boundaries": True,
+        }
+
+    @classmethod
+    def is_point_on_pitch(
+        cls,
+        u: float,
+        v: float,
+        boundaries: Dict[str, Any],
+        pitch_contour: Optional[np.ndarray] = None,
+    ) -> bool:
+        """Check whether a player's ground contact point (u, v) is inside the playable field lines."""
+        # 1. Pitch contour test (if green grass polygon was extracted)
+        if pitch_contour is not None:
+            dist = cv2.pointPolygonTest(pitch_contour, (float(u), float(v)), True)
+            if dist < -4.0:  # Outside playable turf polygon (bench area / running track / crowd)
+                return False
+
+        # 2. Touchline boundary limits (near and far sidelines)
+        v_top = boundaries.get("top_touchline_v", 0.0)
+        v_bot = boundaries.get("bottom_touchline_v", 9999.0)
+        # Margin of 4 pixels to account for line width
+        if v < (v_top - 4.0) or v > (v_bot + 6.0):
+            return False
+
+        return True
 
 
 class CameraMotionTracker:

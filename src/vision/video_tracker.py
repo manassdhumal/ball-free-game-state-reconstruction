@@ -10,8 +10,12 @@ from ultralytics import YOLO
 
 from pathlib import Path
 
-from .homography import PitchHomography, PitchMarkingDetector, CameraMotionTracker
-from .jersey_classifier import JerseyClassifier
+try:
+    from .homography import PitchHomography, PitchMarkingDetector, CameraMotionTracker
+    from .jersey_classifier import JerseyClassifier
+except ImportError:
+    from homography import PitchHomography, PitchMarkingDetector, CameraMotionTracker
+    from jersey_classifier import JerseyClassifier
 
 
 class VideoGameStateTracker:
@@ -151,8 +155,12 @@ class VideoGameStateTracker:
                 continue
 
             # Extract playable pitch surface and contours
-            grass_mask, _white_lines, pitch_contour = PitchMarkingDetector.extract_grass_and_lines(frame)
+            grass_mask, white_lines, pitch_contour = PitchMarkingDetector.extract_grass_and_lines(frame)
             has_grass = bool(np.mean(grass_mask > 0) > 0.08)
+
+            # Detect horizontal/vertical pitch boundaries, touchline limits, and camera perspective tilt
+            boundaries = PitchMarkingDetector.detect_pitch_boundaries_and_angles(frame, white_lines, pitch_contour)
+            self.metadata["pitch_inclination_deg"] = boundaries.get("pitch_inclination_deg", 0.0)
 
             # Preserve distant-player detail in HD footage without changing detector confidence.
             inference_imgsz = 960 if max(width, height) >= 720 else 640
@@ -248,23 +256,16 @@ class VideoGameStateTracker:
                         v_foot = v_raw
                     track_foot_smooth[player_key] = (u_foot, v_foot)
 
-                    # Filter linesmen (outside line referees), bench personnel, and photographers
-                    if pitch_contour is not None:
-                        poly_dist = cv2.pointPolygonTest(pitch_contour, (u_foot, v_foot), True)
-                        if poly_dist < -4.0:  # Outside playable turf polygon
-                            continue
-                    elif has_grass:
-                        u_idx = int(np.clip(u_foot, 0, width - 1))
-                        v_idx = int(np.clip(v_foot, 0, height - 1))
-                        if grass_mask[v_idx, u_idx] == 0:
-                            continue
+                    # Filter out outside-the-pitch people (managers in technical areas, bench substitutes, linesmen)
+                    if not PitchMarkingDetector.is_point_on_pitch(u_foot, v_foot, boundaries, pitch_contour):
+                        continue
 
                     if not self.homography.calibrated:
                         self.homography = PitchHomography.from_preset("main_broadcast", width, height)
 
                     # Unclamped projection into canonical pitch space
                     raw_x, raw_y = self.homography.project_raw(u_foot, v_foot)
-                    # If outside pitch sidelines or goal lines, DROP (linesmen, sidelines, coaches!)
+                    # If outside pitch sidelines or goal lines, DROP (linesmen, technical area, coaches!)
                     if raw_x < -0.015 or raw_x > 1.015 or raw_y < -0.015 or raw_y > 1.015:
                         continue
 
@@ -308,6 +309,7 @@ class VideoGameStateTracker:
             progress_callback(0.80, "Classifying player team affiliations")
         self.classifier.fit_teams(player_colors)
         self.team_colors = self.classifier.get_team_hex_colors()
+        self.team_names = self.classifier.team_names
 
         # Phase 3: Construct canonical tall tracking table (Filter out referees!)
         canonical_rows = []
@@ -321,7 +323,7 @@ class VideoGameStateTracker:
             if team == "referee":
                 continue
 
-            canonical_player_id = f"{team.upper()}_{track_id}"
+            canonical_player_id = f"{team.upper().replace(' ', '_')}_{track_id}"
 
             canonical_rows.append({
                 "match_id": match_id,
@@ -331,7 +333,7 @@ class VideoGameStateTracker:
                 "team": team,
                 "x": det["x"],
                 "y": det["y"],
-                "jersey_color": self.classifier.get_player_hex_color(track_id),
+                "jersey_color": self.classifier.get_player_hex_color(track_id) or self.team_colors.get(team),
                 "confidence": det["confidence"],
                 "visible": True,
             })
@@ -342,7 +344,12 @@ class VideoGameStateTracker:
         if progress_callback:
             progress_callback(0.88, "Smoothing player tracks to match gameplay footage...")
         df = self.densify_and_persist_tracks(
-            df, total_frames=processed_count, fps=native_fps, fill_all_frames=True
+            df,
+            total_frames=processed_count,
+            fps=native_fps,
+            fill_all_frames=True,
+            team_names=self.classifier.team_names,
+            team_colors=self.team_colors,
         )
 
         # Sort canonically by frame and player_id
@@ -362,6 +369,8 @@ class VideoGameStateTracker:
         max_stitch_gap: int = 120,
         min_track_observations: int = 8,
         fill_all_frames: bool = False,
+        team_names: Optional[Tuple[str, str]] = None,
+        team_colors: Optional[Dict[str, str]] = None,
     ) -> pd.DataFrame:
         """Persist player tracks and interpolate only brief, in-clip occlusions."""
         if df.empty or "player_id" not in df.columns:
@@ -504,59 +513,74 @@ class VideoGameStateTracker:
         total_span = max(total_frames, int(df["frame"].max() + 1))
         all_frames_df = pd.DataFrame({"frame": range(total_span)})
 
-        # Complete full 11-player squad per team (22 players total)
-        home_tactical_template = [
-            ("HOME_1", 0.04, 0.50),   # Goalkeeper
-            ("HOME_2", 0.18, 0.20),   # Left Back
-            ("HOME_3", 0.16, 0.40),   # Center Back L
-            ("HOME_4", 0.16, 0.60),   # Center Back R
-            ("HOME_5", 0.18, 0.80),   # Right Back
-            ("HOME_6", 0.35, 0.32),   # Midfielder L
-            ("HOME_7", 0.35, 0.68),   # Midfielder R
-            ("HOME_8", 0.42, 0.50),   # Central Attacking Mid
-            ("HOME_9", 0.55, 0.22),   # Left Winger
-            ("HOME_10", 0.58, 0.50),  # Center Forward
-            ("HOME_11", 0.55, 0.78),  # Right Winger
+        # Determine team names dynamically based on inferred jersey colors
+        if team_names is not None and len(team_names) >= 2:
+            t0_name = team_names[0]
+            t1_name = team_names[1]
+        else:
+            present_teams = list(team_groups.keys())
+            t0_name = present_teams[0] if len(present_teams) > 0 else "Team A"
+            t1_name = present_teams[1] if len(present_teams) > 1 else "Team B"
+
+        hex0 = (team_colors.get(t0_name) or team_colors.get("home", "#E62325")) if team_colors else "#E62325"
+        hex1 = (team_colors.get(t1_name) or team_colors.get("away", "#034694")) if team_colors else "#034694"
+
+        prefix0 = t0_name.upper().replace(" ", "_")
+        prefix1 = t1_name.upper().replace(" ", "_")
+
+        # Tactical templates for Team 0 (left-defending) and Team 1 (right-defending)
+        t0_tactical_template = [
+            (f"{prefix0}_1", 0.04, 0.50),   # Goalkeeper
+            (f"{prefix0}_2", 0.18, 0.20),   # Left Back
+            (f"{prefix0}_3", 0.16, 0.40),   # Center Back L
+            (f"{prefix0}_4", 0.16, 0.60),   # Center Back R
+            (f"{prefix0}_5", 0.18, 0.80),   # Right Back
+            (f"{prefix0}_6", 0.35, 0.32),   # Midfielder L
+            (f"{prefix0}_7", 0.35, 0.68),   # Midfielder R
+            (f"{prefix0}_8", 0.42, 0.50),   # Central Attacking Mid
+            (f"{prefix0}_9", 0.55, 0.22),   # Left Winger
+            (f"{prefix0}_10", 0.58, 0.50),  # Center Forward
+            (f"{prefix0}_11", 0.55, 0.78),  # Right Winger
         ]
 
-        away_tactical_template = [
-            ("AWAY_1", 0.96, 0.50),   # Goalkeeper
-            ("AWAY_2", 0.82, 0.80),   # Right Back
-            ("AWAY_3", 0.84, 0.60),   # Center Back R
-            ("AWAY_4", 0.84, 0.40),   # Center Back L
-            ("AWAY_5", 0.82, 0.20),   # Left Back
-            ("AWAY_6", 0.65, 0.68),   # Midfielder R
-            ("AWAY_7", 0.65, 0.32),   # Midfielder L
-            ("AWAY_8", 0.58, 0.50),   # Central Mid
-            ("AWAY_9", 0.45, 0.78),   # Right Winger
-            ("AWAY_10", 0.42, 0.50),  # Center Forward
-            ("AWAY_11", 0.45, 0.22),  # Left Winger
+        t1_tactical_template = [
+            (f"{prefix1}_1", 0.96, 0.50),   # Goalkeeper
+            (f"{prefix1}_2", 0.82, 0.80),   # Right Back
+            (f"{prefix1}_3", 0.84, 0.60),   # Center Back R
+            (f"{prefix1}_4", 0.84, 0.40),   # Center Back L
+            (f"{prefix1}_5", 0.82, 0.20),   # Left Back
+            (f"{prefix1}_6", 0.65, 0.68),   # Midfielder R
+            (f"{prefix1}_7", 0.65, 0.32),   # Midfielder L
+            (f"{prefix1}_8", 0.58, 0.50),   # Central Mid
+            (f"{prefix1}_9", 0.45, 0.78),   # Right Winger
+            (f"{prefix1}_10", 0.42, 0.50),  # Center Forward
+            (f"{prefix1}_11", 0.45, 0.22),  # Left Winger
         ]
 
-        home_sorted = team_groups.get("home", [])
-        away_sorted = team_groups.get("away", [])
-        home_sorted.sort(key=lambda item: item[2], reverse=True)
-        away_sorted.sort(key=lambda item: item[2], reverse=True)
+        t0_sorted = team_groups.get(t0_name, []) or team_groups.get("home", [])
+        t1_sorted = team_groups.get(t1_name, []) or team_groups.get("away", [])
+        t0_sorted.sort(key=lambda item: item[2], reverse=True)
+        t1_sorted.sort(key=lambda item: item[2], reverse=True)
 
         records: List[pd.DataFrame] = []
 
-        # Process Home squad (11 players)
+        # Process Team 0 squad (11 players, constant numbers 1..11 throughout)
         for i in range(11):
-            target_pid = f"HOME_{i+1}"
-            _, def_x, def_y = home_tactical_template[i]
-            if i < len(home_sorted):
-                orig_cid, combined, _ = home_sorted[i]
+            target_pid = f"{prefix0}_{i+1}"
+            _, def_x, def_y = t0_tactical_template[i]
+            if i < len(t0_sorted):
+                orig_cid, combined, _ = t0_sorted[i]
                 p_df = combined.copy()
                 p_df["player_id"] = target_pid
                 merged = pd.merge(all_frames_df, p_df, on="frame", how="left")
                 merged["match_id"] = match_id
                 merged["player_id"] = target_pid
-                merged["team"] = "home"
+                merged["team"] = t0_name
+                merged["team_alias"] = "home"
                 merged["timestamp"] = (merged["frame"] / max(fps, 1.0)).round(4)
                 merged["imputed"] = merged["x"].isna()
                 merged["visible"] = True
-                obs_col = p_df["jersey_color"].dropna()
-                merged["jersey_color"] = obs_col.mode().iloc[0] if not obs_col.empty else "#E62325"
+                merged["jersey_color"] = hex0
                 merged["x"] = merged["x"].interpolate(method="linear", limit_direction="both").fillna(def_x)
                 merged["y"] = merged["y"].interpolate(method="linear", limit_direction="both").fillna(def_y)
                 merged["confidence"] = merged["confidence"].fillna(0.75)
@@ -564,11 +588,12 @@ class VideoGameStateTracker:
                 merged = all_frames_df.copy()
                 merged["match_id"] = match_id
                 merged["player_id"] = target_pid
-                merged["team"] = "home"
+                merged["team"] = t0_name
+                merged["team_alias"] = "home"
                 merged["timestamp"] = (merged["frame"] / max(fps, 1.0)).round(4)
                 merged["x"] = def_x
                 merged["y"] = def_y
-                merged["jersey_color"] = "#E62325"
+                merged["jersey_color"] = hex0
                 merged["confidence"] = 0.60
                 merged["visible"] = True
                 merged["imputed"] = True
@@ -582,23 +607,23 @@ class VideoGameStateTracker:
             merged["y"] = np.clip(merged["y"], 0.005, 0.995)
             records.append(merged)
 
-        # Process Away squad (11 players)
+        # Process Team 1 squad (11 players, constant numbers 1..11 throughout)
         for i in range(11):
-            target_pid = f"AWAY_{i+1}"
-            _, def_x, def_y = away_tactical_template[i]
-            if i < len(away_sorted):
-                orig_cid, combined, _ = away_sorted[i]
+            target_pid = f"{prefix1}_{i+1}"
+            _, def_x, def_y = t1_tactical_template[i]
+            if i < len(t1_sorted):
+                orig_cid, combined, _ = t1_sorted[i]
                 p_df = combined.copy()
                 p_df["player_id"] = target_pid
                 merged = pd.merge(all_frames_df, p_df, on="frame", how="left")
                 merged["match_id"] = match_id
                 merged["player_id"] = target_pid
-                merged["team"] = "away"
+                merged["team"] = t1_name
+                merged["team_alias"] = "away"
                 merged["timestamp"] = (merged["frame"] / max(fps, 1.0)).round(4)
                 merged["imputed"] = merged["x"].isna()
                 merged["visible"] = True
-                obs_col = p_df["jersey_color"].dropna()
-                merged["jersey_color"] = obs_col.mode().iloc[0] if not obs_col.empty else "#034694"
+                merged["jersey_color"] = hex1
                 merged["x"] = merged["x"].interpolate(method="linear", limit_direction="both").fillna(def_x)
                 merged["y"] = merged["y"].interpolate(method="linear", limit_direction="both").fillna(def_y)
                 merged["confidence"] = merged["confidence"].fillna(0.75)
@@ -606,11 +631,12 @@ class VideoGameStateTracker:
                 merged = all_frames_df.copy()
                 merged["match_id"] = match_id
                 merged["player_id"] = target_pid
-                merged["team"] = "away"
+                merged["team"] = t1_name
+                merged["team_alias"] = "away"
                 merged["timestamp"] = (merged["frame"] / max(fps, 1.0)).round(4)
                 merged["x"] = def_x
                 merged["y"] = def_y
-                merged["jersey_color"] = "#034694"
+                merged["jersey_color"] = hex1
                 merged["confidence"] = 0.60
                 merged["visible"] = True
                 merged["imputed"] = True

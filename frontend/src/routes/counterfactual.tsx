@@ -1,9 +1,10 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { useMemo, useState } from "react";
 import { Panel, PageHeader } from "@/components/Panel";
 import { Pitch, PitchLegend } from "@/components/Pitch";
 import { useLivePassRanking, useLivePlayers } from "@/hooks/useGameState";
 import { useSession } from "@/lib/session";
+import { Video } from "lucide-react";
 
 export const Route = createFileRoute("/counterfactual")({
   head: () => ({
@@ -40,6 +41,7 @@ export function Disclaimer() {
 
 function Counterfactual() {
   const { matchId, frame, selectedPlayer, setSelectedPlayer } = useSession();
+  const isVideo = matchId.startsWith("uploaded_") || matchId.startsWith("video_");
   const playerState = useLivePlayers(matchId, frame);
   const players = useMemo(() => playerState.data ?? [], [playerState.data]);
   const [selectedTarget, setSelectedTarget] = useState<string | null>(null);
@@ -84,6 +86,25 @@ function Counterfactual() {
         title="Counterfactual Decisions"
         description="For a chosen source player, the model enumerates every teammate as a hypothetical receiving option and ranks them by a weighted decision score. No ball or intent information enters this computation."
       />
+
+      {isVideo && (
+        <div className="mb-3.5 flex flex-wrap items-center justify-between gap-2 border border-emerald-500/40 bg-emerald-500/10 px-3.5 py-2 rounded text-xs">
+          <div className="flex items-center gap-2 text-emerald-400">
+            <Video className="h-4 w-4 shrink-0" />
+            <span>
+              <strong>Video Perception Options:</strong> Counterfactual passing lines for {matchId} (Frame {frame})
+            </span>
+          </div>
+          <div className="flex items-center gap-3">
+            <Link to="/match-explorer" className="text-[11px] font-semibold text-emerald-400 hover:text-emerald-300 underline">
+              Match Explorer
+            </Link>
+            <Link to="/broadcast" className="text-[11px] font-semibold text-emerald-400 hover:text-emerald-300 underline">
+              Video Studio
+            </Link>
+          </div>
+        </div>
+      )}
 
       <div className="mb-4">
         <Disclaimer />

@@ -71,6 +71,11 @@ export function TopBar() {
       <Link to="/broadcast" className="flex items-stretch hover:bg-muted/40 transition-colors" title="Open Video Game State Reconstruction Studio">
         <Field label="GSR Studio" value={gsrValue} tone={gsrTone} />
       </Link>
+      {isVideoMatch && (
+        <Link to="/match-explorer" className="flex items-stretch hover:bg-muted/40 transition-colors" title="Open Match Explorer for this video">
+          <Field label="Explorer" value="INSPECT" tone="ok" />
+        </Link>
+      )}
       <div className="flex flex-1 items-center justify-end px-4">
         <span className="label-xs flex items-center gap-1.5 font-medium text-emerald-400">
           <span className="h-1.5 w-1.5 rounded-full bg-emerald-400 animate-pulse" />

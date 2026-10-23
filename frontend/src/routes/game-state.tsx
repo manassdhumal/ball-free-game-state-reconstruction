@@ -1,9 +1,10 @@
-import { createFileRoute } from "@tanstack/react-router";
+import { createFileRoute, Link } from "@tanstack/react-router";
 import { Panel, PageHeader, TypeTag } from "@/components/Panel";
 import { Pitch } from "@/components/Pitch";
 import { dist, pressureOn, STATE_FEATURES, supportFor, teamGeometry } from "@/lib/data";
 import { useSession } from "@/lib/session";
 import { useLivePlayers } from "@/hooks/useGameState";
+import { Video, ArrowRight } from "lucide-react";
 
 export const Route = createFileRoute("/game-state")({
   head: () => ({
@@ -26,6 +27,7 @@ export const Route = createFileRoute("/game-state")({
 
 function GameState() {
   const { matchId, frame, selectedPlayer, setSelectedPlayer } = useSession();
+  const isVideo = matchId.startsWith("uploaded_") || matchId.startsWith("video_");
   const liveState = useLivePlayers(matchId, frame);
   const players = liveState.data ?? [];
   if (liveState.isLoading)
@@ -59,6 +61,25 @@ function GameState() {
         title="Game State"
         description={`Reconstructed state vector at frame ${frame}. Each feature is labelled by provenance: model-derived quantities are inferred, heuristics are rule-based, measured proxies come directly from tracking geometry.`}
       />
+
+      {isVideo && (
+        <div className="mb-3.5 flex flex-wrap items-center justify-between gap-2 border border-emerald-500/40 bg-emerald-500/10 px-3.5 py-2 rounded text-xs">
+          <div className="flex items-center gap-2 text-emerald-400">
+            <Video className="h-4 w-4 shrink-0" />
+            <span>
+              <strong>Video Reconstructed Game State:</strong> {matchId} (Frame {frame})
+            </span>
+          </div>
+          <div className="flex items-center gap-3">
+            <Link to="/match-explorer" className="text-[11px] font-semibold text-emerald-400 hover:text-emerald-300 underline">
+              Match Explorer
+            </Link>
+            <Link to="/broadcast" className="text-[11px] font-semibold text-emerald-400 hover:text-emerald-300 underline">
+              Video Studio
+            </Link>
+          </div>
+        </div>
+      )}
 
       <div className="grid gap-4 xl:grid-cols-[1.1fr_1fr]">
         <Panel

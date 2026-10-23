@@ -49,6 +49,115 @@ def _paths(match_id: str) -> tuple[Path, Path, Path]:
     )
 
 
+def _get_frame_rows(df: pd.DataFrame, frame_number: int) -> tuple[pd.DataFrame, int]:
+    if df.empty:
+        raise IndexError(frame_number)
+    rows = df[df["frame"] == frame_number]
+    if not rows.empty:
+        return rows, frame_number
+    min_f = int(df["frame"].min())
+    max_f = int(df["frame"].max())
+    if frame_number < min_f - 25 or frame_number > max_f + 25:
+        raise IndexError(frame_number)
+    import numpy as np
+    avail = df["frame"].unique()
+    closest_f = int(avail[np.abs(avail - frame_number).argmin()])
+    return df[df["frame"] == closest_f], closest_f
+
+
+def _infer_video_events(match_id: str) -> pd.DataFrame:
+    try:
+        df = tracking(match_id)
+        if df.empty:
+            return pd.DataFrame(columns=["match_id", "frame", "timestamp", "type", "team", "player_id"])
+        unique_frames = sorted(df["frame"].unique())
+        fps = FPS
+        events_list = []
+        prev_possessor = None
+        prev_team = None
+
+        for f in unique_frames:
+            f_rows = df[df["frame"] == f]
+            if len(f_rows) < 4:
+                continue
+            f_time = float(f / fps)
+            graph = build_frame_graph(f_rows, int(f), f_time)
+            scores = score_frame(graph)
+            if not scores.empty:
+                top = scores.iloc[0]
+                cur_possessor = f"{str(top.team).upper()}_{top.player_id}"
+                cur_team = str(top.team)
+                if prev_possessor is None:
+                    prev_possessor = cur_possessor
+                    prev_team = cur_team
+                    events_list.append({
+                        "match_id": match_id,
+                        "event_id": len(events_list) + 1,
+                        "frame": int(f),
+                        "start_frame": int(f),
+                        "end_frame": int(f),
+                        "timestamp": f_time,
+                        "start_timestamp": f_time,
+                        "end_timestamp": f_time,
+                        "type": "RECOVERY",
+                        "event_type": "RECOVERY",
+                        "team": cur_team,
+                        "player_id": cur_possessor,
+                    })
+                elif cur_team != prev_team:
+                    events_list.append({
+                        "match_id": match_id,
+                        "event_id": len(events_list) + 1,
+                        "frame": int(f),
+                        "start_frame": int(f),
+                        "end_frame": int(f),
+                        "timestamp": f_time,
+                        "start_timestamp": f_time,
+                        "end_timestamp": f_time,
+                        "type": "BALL LOST",
+                        "event_type": "BALL LOST",
+                        "team": prev_team,
+                        "player_id": prev_possessor,
+                    })
+                    events_list.append({
+                        "match_id": match_id,
+                        "event_id": len(events_list) + 1,
+                        "frame": int(f),
+                        "start_frame": int(f),
+                        "end_frame": int(f),
+                        "timestamp": f_time,
+                        "start_timestamp": f_time,
+                        "end_timestamp": f_time,
+                        "type": "RECOVERY",
+                        "event_type": "RECOVERY",
+                        "team": cur_team,
+                        "player_id": cur_possessor,
+                    })
+                    prev_possessor = cur_possessor
+                    prev_team = cur_team
+                elif cur_possessor != prev_possessor:
+                    events_list.append({
+                        "match_id": match_id,
+                        "event_id": len(events_list) + 1,
+                        "frame": int(f),
+                        "start_frame": int(f),
+                        "end_frame": int(f),
+                        "timestamp": f_time,
+                        "start_timestamp": f_time,
+                        "end_timestamp": f_time,
+                        "type": "PASS",
+                        "event_type": "PASS",
+                        "team": cur_team,
+                        "player_id": cur_possessor,
+                    })
+                    prev_possessor = cur_possessor
+        if events_list:
+            return pd.DataFrame(events_list)
+    except Exception:
+        pass
+    return pd.DataFrame(columns=["match_id", "event_id", "frame", "start_frame", "timestamp", "start_timestamp", "type", "event_type", "team", "player_id"])
+
+
 @lru_cache(maxsize=16)
 def tracking(match_id: str) -> pd.DataFrame:
     interim_csv = ROOT / "data" / "interim" / f"{match_id}_canonical_tracking.csv"
@@ -64,41 +173,78 @@ def tracking(match_id: str) -> pd.DataFrame:
 @lru_cache(maxsize=16)
 def events(match_id: str) -> pd.DataFrame:
     if match_id.startswith("uploaded_") or match_id.startswith("video_"):
-        return pd.DataFrame(columns=["match_id", "frame", "timestamp", "type", "team", "player_id"])
+        return _infer_video_events(match_id)
     _home, _away, event_path = _paths(match_id)
     return load_metrica_events(str(event_path), match_id)
 
 
+METRICA_FRAME_COUNTS = {
+    "metrica_game1": 145006,
+    "metrica_game2": 141156,
+}
+
+
 def matches() -> list[dict[str, Any]]:
+    import json
     result = []
+    seen_ids = set()
     for match_id in ("metrica_game1", "metrica_game2"):
         try:
-            frame_count = int(tracking(match_id)["frame"].max())
+            home_path, _, event_path = _paths(match_id)
+            if not home_path.exists():
+                continue
+            frame_count = METRICA_FRAME_COUNTS.get(match_id, 145000)
+            seen_ids.add(match_id)
+            result.append({
+                "match_id": match_id,
+                "label": match_id.replace("_", " ").title(),
+                "fps": FPS,
+                "frame_count": frame_count,
+                "events_available": event_path.exists(),
+                "tracking_available": True,
+            })
         except (FileNotFoundError, KeyError):
             continue
-        result.append({
-            "match_id": match_id,
-            "label": match_id.replace("_", " ").title(),
-            "fps": FPS,
-            "frame_count": frame_count,
-            "events_available": _paths(match_id)[2].exists(),
-            "tracking_available": True,
-        })
+
+    registry_file = ROOT / "data" / "interim" / "uploads" / "video_registry.json"
+    registry: dict[str, Any] = {}
+    if registry_file.exists():
+        try:
+            registry = json.loads(registry_file.read_text(encoding="utf-8"))
+        except Exception:
+            registry = {}
+
     # Dynamically include uploaded video gameplay matches
     interim_dir = ROOT / "data" / "interim"
     if interim_dir.exists():
-        for csv_file in interim_dir.glob("*_canonical_tracking.csv"):
+        for csv_file in sorted(interim_dir.glob("*_canonical_tracking.csv"), key=lambda f: f.stat().st_mtime, reverse=True):
             m_id = csv_file.name.replace("_canonical_tracking.csv", "")
+            if m_id in seen_ids:
+                continue
+            seen_ids.add(m_id)
             try:
-                df = tracking(m_id)
-                frame_count = int(df["frame"].max())
+                v_id = m_id.replace("uploaded_", "")
+                summary_file = interim_dir / f"{m_id}_summary.json"
+                frame_count = 120
+                if summary_file.exists():
+                    try:
+                        s_data = json.loads(summary_file.read_text(encoding="utf-8"))
+                        frame_count = int(s_data.get("frame_count") or s_data.get("max_frame") or 120)
+                    except Exception:
+                        frame_count = 120
+                elif registry.get(v_id, {}).get("total_frames"):
+                    frame_count = int(registry[v_id]["total_frames"])
+                
+                friendly_name = registry.get(v_id, {}).get("filename") if registry else None
+                label_text = f"Video: {friendly_name}" if friendly_name else f"Video: {v_id.replace('_', ' ').title()}"
                 result.append({
                     "match_id": m_id,
-                    "label": f"Video: {m_id.replace('uploaded_', '').replace('_', ' ').title()}",
+                    "label": label_text,
                     "fps": FPS,
                     "frame_count": frame_count,
-                    "events_available": False,
+                    "events_available": True,
                     "tracking_available": True,
+                    "is_video": True,
                 })
             except Exception:
                 continue
@@ -107,16 +253,7 @@ def matches() -> list[dict[str, Any]]:
 
 def frame(match_id: str, frame_number: int) -> dict[str, Any]:
     df = tracking(match_id)
-    rows = df[df["frame"] == frame_number]
-    if rows.empty:
-        if df.empty:
-            raise IndexError(frame_number)
-        import numpy as np
-        avail = df["frame"].unique()
-        closest_f = avail[np.abs(avail - frame_number).argmin()]
-        if abs(int(closest_f) - int(frame_number)) > 15:
-            raise IndexError(frame_number)
-        rows = df[df["frame"] == closest_f]
+    rows, resolved_f = _get_frame_rows(df, frame_number)
     players = []
     for row in rows.itertuples(index=False):
         pid = str(row.player_id)
@@ -134,11 +271,12 @@ def frame(match_id: str, frame_number: int) -> dict[str, Any]:
             "visible": bool(getattr(row, "visible", True)),
             "jersey_color": None if pd.isna(jersey_color) else str(jersey_color),
         })
-    timestamp = float(rows["timestamp"].iloc[0])
-    return {"match_id": match_id, "frame": frame_number, "timestamp": timestamp,
+    timestamp = float(rows["timestamp"].iloc[0]) if "timestamp" in rows else float(resolved_f / FPS)
+    is_video = match_id.startswith("uploaded_") or match_id.startswith("video_")
+    return {"match_id": match_id, "frame": resolved_f, "timestamp": timestamp,
             "fps": FPS, "players": players,
-            "provenance": {"dataset": "Metrica Sample Game 1" if match_id.endswith("1") else "Metrica Sample Game 2",
-                           "sequence": match_id, "frame_range": str(frame_number), "fps": FPS}}
+            "provenance": {"dataset": "Uploaded Video Perception" if is_video else ("Metrica Sample Game 1" if match_id.endswith("1") else "Metrica Sample Game 2"),
+                           "sequence": match_id, "frame_range": str(resolved_f), "fps": FPS}}
 
 
 def player_trajectory(match_id: str, player_id: str, limit: int = 250) -> list[dict[str, Any]]:
@@ -155,33 +293,32 @@ def player_trajectory(match_id: str, player_id: str, limit: int = 250) -> list[d
 
 def possession(match_id: str, frame_number: int) -> dict[str, Any]:
     state = tracking(match_id)
-    rows = state[state["frame"] == frame_number]
-    if rows.empty:
-        raise IndexError(frame_number)
-    graph = build_frame_graph(rows, frame_number, float(rows["timestamp"].iloc[0]))
+    rows, resolved_f = _get_frame_rows(state, frame_number)
+    timestamp = float(rows["timestamp"].iloc[0]) if "timestamp" in rows else float(resolved_f / FPS)
+    graph = build_frame_graph(rows, resolved_f, timestamp)
     scores = score_frame(graph)
     if scores.empty:
         return {"status": "unavailable", "message": "No visible players at this frame."}
     top = scores.iloc[0]
     return {"status": "available", "possessor_id": f"{str(top.team).upper()}_{top.player_id}",
             "team": str(top.team), "score": float(top.raw_score), "state": "inferred",
-            "provenance": {"dataset": match_id, "frame_range": str(frame_number), "method": "ball-free heuristic"}}
+            "provenance": {"dataset": match_id, "frame_range": str(resolved_f), "method": "ball-free heuristic"}}
 
 
 def tactical(match_id: str, frame_number: int) -> dict[str, Any]:
     from src.tactics.tactical_features import extract_tactical_features
     state = tracking(match_id)
-    rows = state[state["frame"] == frame_number]
-    if rows.empty:
-        raise IndexError(frame_number)
-    graph = build_frame_graph(rows, frame_number, float(rows["timestamp"].iloc[0]))
+    rows, resolved_f = _get_frame_rows(state, frame_number)
+    timestamp = float(rows["timestamp"].iloc[0]) if "timestamp" in rows else float(resolved_f / FPS)
+    graph = build_frame_graph(rows, resolved_f, timestamp)
     return {"status": "available", "features": _clean(extract_tactical_features(graph)),
-            "provenance": {"dataset": match_id, "frame_range": str(frame_number), "method": "player-only spatial graph"}}
+            "provenance": {"dataset": match_id, "frame_range": str(resolved_f), "method": "player-only spatial graph"}}
 
 
 def pass_candidates(match_id: str, frame_number: int, player_id: str) -> list[dict[str, Any]]:
     state = tracking(match_id)
-    rows = state[state["frame"] == frame_number].copy()
+    rows, _ = _get_frame_rows(state, frame_number)
+    rows = rows.copy()
     raw_id = player_id.split("_", 1)[-1]
     candidates = generate_pass_candidates(rows, raw_id)
     if candidates.empty:
@@ -191,7 +328,8 @@ def pass_candidates(match_id: str, frame_number: int, player_id: str) -> list[di
 
 def pass_ranking(match_id: str, frame_number: int, player_id: str) -> list[dict[str, Any]]:
     state = tracking(match_id)
-    rows = state[state["frame"] == frame_number].copy()
+    rows, _ = _get_frame_rows(state, frame_number)
+    rows = rows.copy()
     raw_id = player_id.split("_", 1)[-1]
     ranking = rank_counterfactual_passes(rows, PassProbabilityModel(), raw_id)
     if ranking.empty:

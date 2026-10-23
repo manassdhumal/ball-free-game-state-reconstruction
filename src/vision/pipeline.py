@@ -110,8 +110,12 @@ class VideoAnalysisPipeline:
             progress_callback(0.90, "Computing ball-free possession and Tactical Advantage Scores...")
 
         unique_frames = sorted(tracking_df["frame"].unique())
-        home_possession_count = 0
-        away_possession_count = 0
+        team_names = getattr(tracker, "team_names", ("home", "away"))
+        t0_name = team_names[0]
+        t1_name = team_names[1]
+
+        t0_poss_count = 0
+        t1_poss_count = 0
         tas_scores = []
         frame_insights = []
 
@@ -132,14 +136,14 @@ class VideoAnalysisPipeline:
                     top = scores_df.iloc[0]
                     poss_team = str(top["team"])
                     possessor_id = str(top["player_id"])
-                    if poss_team == "home":
-                        home_possession_count += 1
-                    elif poss_team == "away":
-                        away_possession_count += 1
+                    if poss_team in (t0_name, "home"):
+                        t0_poss_count += 1
+                    elif poss_team in (t1_name, "away"):
+                        t1_poss_count += 1
 
                     # Tactical Score
                     features = extract_tactical_features(f_graph, possessor_id=possessor_id, home_attacks_x1=True)
-                    tas_val = calculate_tactical_score(features, possessor_team=poss_team or "home")
+                    tas_val = calculate_tactical_score(features, possessor_team=poss_team or t0_name)
                     tas_scores.append(tas_val)
 
                     frame_insights.append({
@@ -151,9 +155,9 @@ class VideoAnalysisPipeline:
             except Exception:
                 continue
 
-        total_poss_frames = max(1, home_possession_count + away_possession_count)
-        home_pct = round(100.0 * home_possession_count / total_poss_frames, 1)
-        away_pct = round(100.0 * away_possession_count / total_poss_frames, 1)
+        total_poss_frames = max(1, t0_poss_count + t1_poss_count)
+        t0_pct = round(100.0 * t0_poss_count / total_poss_frames, 1)
+        t1_pct = round(100.0 * t1_poss_count / total_poss_frames, 1)
         avg_tas = round(float(sum(tas_scores) / max(1, len(tas_scores))), 4) if tas_scores else 0.500
 
         if progress_callback:
@@ -165,6 +169,7 @@ class VideoAnalysisPipeline:
         dur = meta.get("segment_duration_sec", round(len(unique_frames) / max(fps, 1.0), 2))
         start_t = meta.get("start_time_sec", 0.0)
         end_t = meta.get("end_time_sec", dur)
+        team_colors = getattr(tracker, "team_colors", {t0_name: "#E62325", t1_name: "#034694", "home": "#E62325", "away": "#034694"})
 
         return {
             "match_id": match_id,
@@ -180,8 +185,14 @@ class VideoAnalysisPipeline:
             "total_video_frames": total_vid_frames,
             "tracking_rows": len(tracking_df),
             "tracking_file": str(output_csv),
-            "team_colors": getattr(tracker, "team_colors", {"home": "#E62325", "away": "#034694"}),
-            "possession_share": {"home": home_pct, "away": away_pct},
+            "team_names": [t0_name, t1_name],
+            "team_colors": team_colors,
+            "possession_share": {
+                t0_name: t0_pct,
+                t1_name: t1_pct,
+                "home": t0_pct,
+                "away": t1_pct,
+            },
             "average_tas": avg_tas,
             "sample_insights": frame_insights,
         }
