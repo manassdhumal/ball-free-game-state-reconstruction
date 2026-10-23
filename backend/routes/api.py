@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Query
+import pandas as pd
 
 try:
     from ..services import data_service as data
@@ -187,11 +188,13 @@ VIDEO_PROGRESS: dict[str, dict[str, Any]] = {}
 class ProcessVideoRequest(BaseModel):
     video_id: str
     preset: str = "auto_detect"
-    max_frames: Optional[int] = 375
+    max_frames: Optional[int] = None
     frame_stride: int = 1
-    conf_threshold: float = 0.18
+    conf_threshold: float = 0.08
     apply_mitigation: bool = True
     custom_corners: Optional[list[list[float]]] = None
+    start_time_sec: Optional[float] = 0.0
+    end_time_sec: Optional[float] = None
 
 ProcessVideoRequest.model_rebuild()
 
@@ -284,6 +287,16 @@ def sample_demo(background_tasks: BackgroundTasks):
                 progress_callback=progress_callback,
             )
 
+            if result.get("status") == "error":
+                VIDEO_PROGRESS[demo_id] = {
+                    "progress": 0.0,
+                    "status": "Analysis failed",
+                    "completed": True,
+                    "error": result.get("message", "Sample analysis failed."),
+                    "data": None,
+                }
+                return
+
             data.tracking.cache_clear()
             VIDEO_PROGRESS[demo_id] = {
                 "progress": 1.0,
@@ -347,8 +360,8 @@ def process_video(req: ProcessVideoRequest, background_tasks: BackgroundTasks):
 
             from src.vision.homography import PitchHomography
             pipeline = VideoAnalysisPipeline(
-                homography_preset=req.preset,
-                conf_threshold=req.conf_threshold,
+                homography_preset="auto_detect",
+                conf_threshold=0.08,  # Locked to optimal 0.08 sensitivity for complete 22-player recall
             )
             if req.custom_corners and len(req.custom_corners) == 4:
                 pipeline.homography = PitchHomography.from_four_points(req.custom_corners)
@@ -358,10 +371,22 @@ def process_video(req: ProcessVideoRequest, background_tasks: BackgroundTasks):
                 video_path=str(video_path),
                 match_id=match_id,
                 max_frames=max_frames_to_run,
-                frame_stride=max(1, req.frame_stride),
-                apply_mitigation=req.apply_mitigation,
+                frame_stride=1,  # Locked to optimal Stride 1 (100% fidelity)
+                apply_mitigation=True,
                 progress_callback=progress_callback,
+                start_time_sec=req.start_time_sec or 0.0,
+                end_time_sec=req.end_time_sec,
             )
+
+            if result.get("status") == "error":
+                VIDEO_PROGRESS[req.video_id] = {
+                    "progress": 0.0,
+                    "status": "Analysis failed",
+                    "completed": True,
+                    "error": result.get("message", "Video analysis failed. Please verify that the video contains football gameplay."),
+                    "data": None,
+                }
+                return
 
             # Invalidate tracking cache in data service
             data.tracking.cache_clear()

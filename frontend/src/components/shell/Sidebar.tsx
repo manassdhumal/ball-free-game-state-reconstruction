@@ -7,13 +7,6 @@ import {
   Timer,
   BarChart3,
   GitBranch,
-  Gauge,
-  Waves,
-  Activity,
-  Wrench,
-  FlaskConical,
-  FileText,
-  AlertTriangle,
   Sparkles,
   Zap,
 } from "lucide-react";
@@ -36,18 +29,6 @@ const NAV: Array<{
       { to: "/possession", label: "Possession & Events", icon: Timer },
       { to: "/tactical", label: "Tactical Advantage (TAS)", icon: BarChart3 },
       { to: "/counterfactual", label: "Counterfactual Decisions", icon: GitBranch },
-    ],
-  },
-  {
-    group: "Verification & Research",
-    items: [
-      { to: "/benchmark", label: "3-Tier Robustness", icon: Gauge },
-      { to: "/noise-lab", label: "Noise & Degradation Lab", icon: Waves },
-      { to: "/tracking-quality", label: "Tracking Quality", icon: Activity },
-      { to: "/recovery", label: "Recovery & Filtering", icon: Wrench },
-      { to: "/results", label: "Research Results", icon: FileText },
-      { to: "/experiments", label: "Controlled Experiments", icon: FlaskConical },
-      { to: "/limitations", label: "System Boundaries", icon: AlertTriangle },
     ],
   },
 ];

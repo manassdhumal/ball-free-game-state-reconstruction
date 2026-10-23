@@ -37,7 +37,14 @@ function GameState() {
         description="Data not available. Start the FastAPI backend and select a valid frame."
       />
     );
-  const sel = players.find((p) => p.id === selectedPlayer) ?? players[9]!;
+  const sel = players.find((p) => p.id === selectedPlayer) ?? players[0];
+  if (!sel)
+    return (
+      <PageHeader
+        title="Game State"
+        description="Data not available. Start the FastAPI backend and select a valid frame."
+      />
+    );
   const home = teamGeometry(players, "home");
   const away = teamGeometry(players, "away");
   const mates = players.filter((p) => p.team === sel.team && p.id !== sel.id);

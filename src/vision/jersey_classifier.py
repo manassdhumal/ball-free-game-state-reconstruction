@@ -163,28 +163,23 @@ class JerseyClassifier:
 
         team_labs = player_labs[team_sample_indices]
         team_rgbs = player_rgbs[team_sample_indices]
-        k_clusters = min(2, len(team_sample_indices))
         cv2.setRNGSeed(0)
+        k_clusters = min(2, len(team_sample_indices))
         _, labels, centers = cv2.kmeans(
-            team_labs, k_clusters, None, criteria, 10, cv2.KMEANS_PP_CENTERS
+            team_labs, k_clusters, None, criteria, 15, cv2.KMEANS_PP_CENTERS
         )
         labels = labels.flatten()
 
-        # Cluster only the two outfield kits; bright neutral accents must not form a team.
-        cluster_counts = Counter(labels)
-        sorted_clusters = [c_idx for c_idx, _ in cluster_counts.most_common(2)]
-
-        c0_idx = sorted_clusters[0]
-        c1_idx = sorted_clusters[1] if len(sorted_clusters) > 1 else (1 if c0_idx == 0 else 0)
-
-        # Average the RGB colors of players belonging to each team cluster
-        c0_players_mask = labels == c0_idx
-        c1_players_mask = labels == c1_idx
+        c0_players_mask = labels == 0
+        c1_players_mask = labels == 1 if k_clusters > 1 else labels == 0
 
         c0_rgb = np.median(team_rgbs[c0_players_mask], axis=0) if np.any(c0_players_mask) else team_rgbs[0]
         c1_rgb = np.median(team_rgbs[c1_players_mask], axis=0) if np.any(c1_players_mask) else team_rgbs[-1]
 
-        if tuple(c1_rgb.tolist()) < tuple(c0_rgb.tolist()):
+        # Order teams deterministically: brighter kit to team 1, darker kit to team 0 (or vice versa)
+        c0_lum = 0.299 * c0_rgb[0] + 0.587 * c0_rgb[1] + 0.114 * c0_rgb[2]
+        c1_lum = 0.299 * c1_rgb[0] + 0.587 * c1_rgb[1] + 0.114 * c1_rgb[2]
+        if c1_lum < c0_lum:
             c0_rgb, c1_rgb = c1_rgb, c0_rgb
 
         self.team_colors[self.team_names[0]] = c0_rgb
@@ -193,23 +188,18 @@ class JerseyClassifier:
         self._team_lab_centers[self.team_names[1]] = self._rgb_to_lab(c1_rgb)
         self._fitted = True
 
-        # Identify referee outliers and assign outfield players
-        # Outfield players and goalkeepers must be preserved; only explicit fluorescent referee kits are excluded
-        for p_id, p_lab, p_rgb, p_label in zip(unique_players, player_labs, player_rgbs, labels):
+        # Assign all players reliably to their true team
+        for p_id, p_lab, p_rgb in zip(unique_players, player_labs, player_rgbs):
             dist_0 = float(np.linalg.norm(p_lab - self._team_lab_centers[self.team_names[0]]))
             dist_1 = float(np.linalg.norm(p_lab - self._team_lab_centers[self.team_names[1]]))
-            min_dist = min(dist_0, dist_1)
 
             is_ref = False
             # Only genuine referee kit signatures (high fluorescence neon lime, magenta, turquoise)
             if (p_rgb[0] > 140 and p_rgb[1] > 165 and p_rgb[2] < 80 and (p_rgb[1] - p_rgb[2]) > 70):
-                # Fluorescent neon yellow / lime referee kit
                 is_ref = True
             elif (p_rgb[0] > 170 and p_rgb[1] < 80 and p_rgb[2] > 120):
-                # Fluorescent pink / magenta referee kit
                 is_ref = True
             elif (p_rgb[0] < 50 and p_rgb[1] > 160 and p_rgb[2] > 170):
-                # Bright cyan / turquoise referee kit
                 is_ref = True
 
             if is_ref:

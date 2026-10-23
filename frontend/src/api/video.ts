@@ -24,6 +24,8 @@ export interface VideoProcessResponse {
     max_frame?: number;
     fps?: number;
     duration_sec?: number;
+    start_time_sec?: number;
+    end_time_sec?: number;
     frame_stride?: number;
     total_video_frames?: number;
     team_colors?: { home: string; away: string };
@@ -82,12 +84,14 @@ export async function uploadVideoFile(file: File): Promise<VideoUploadResponse> 
 
 export function processVideo(params: {
   video_id: string;
-  preset?: string;
-  max_frames?: number;
-  frame_stride?: number;
-  conf_threshold?: number;
-  apply_mitigation?: boolean;
-  custom_corners?: Array<[number, number]>;
+  preset?: string | undefined;
+  max_frames?: number | undefined;
+  frame_stride?: number | undefined;
+  conf_threshold?: number | undefined;
+  apply_mitigation?: boolean | undefined;
+  custom_corners?: Array<[number, number]> | undefined;
+  start_time_sec?: number | undefined;
+  end_time_sec?: number | undefined;
 }): Promise<{ status: string; video_id: string; match_id: string; message: string }> {
   return apiFetch("/video/process", {
     method: "POST",
@@ -95,11 +99,13 @@ export function processVideo(params: {
     body: JSON.stringify({
       video_id: params.video_id,
       preset: params.preset ?? "auto_detect",
-      max_frames: params.max_frames ?? 375,
+      max_frames: params.max_frames,
       frame_stride: params.frame_stride ?? 1,
-      conf_threshold: params.conf_threshold ?? 0.18,
+      conf_threshold: params.conf_threshold ?? 0.08,
       apply_mitigation: params.apply_mitigation ?? true,
       custom_corners: params.custom_corners,
+      start_time_sec: params.start_time_sec ?? 0.0,
+      end_time_sec: params.end_time_sec,
     }),
   });
 }

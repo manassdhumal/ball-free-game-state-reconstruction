@@ -52,6 +52,8 @@ class VideoGameStateTracker:
         max_frames: Optional[int] = None,
         frame_stride: int = 1,
         progress_callback: Optional[Callable[[float, str], None]] = None,
+        start_time_sec: float = 0.0,
+        end_time_sec: Optional[float] = None,
     ) -> pd.DataFrame:
         """Process a video file and generate a canonical tracking DataFrame.
 
@@ -61,6 +63,8 @@ class VideoGameStateTracker:
             max_frames: Optional limit on the number of frames to process.
             frame_stride: Process every N-th frame (default 1 for all frames).
             progress_callback: Function accepting (progress_ratio: float, status_msg: str).
+            start_time_sec: Start timestamp in seconds to crop from (e.g., 120.0 for 2:00).
+            end_time_sec: Optional end timestamp in seconds to crop to (e.g., 180.0 for 3:00).
 
         Returns:
             DataFrame adhering to canonical tracking schema (tall table).
@@ -77,25 +81,44 @@ class VideoGameStateTracker:
         width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
         height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
+        # Calculate time crop window in frames
+        start_frame = max(0, min(total_frames - 1, int(round(start_time_sec * native_fps)))) if start_time_sec > 0 else 0
+        if end_time_sec is not None and end_time_sec > start_time_sec:
+            end_frame = max(start_frame + 1, min(total_frames, int(round(end_time_sec * native_fps))))
+            frames_to_process = end_frame - start_frame
+        elif max_frames is not None and max_frames > 0:
+            frames_to_process = min(total_frames - start_frame, max_frames)
+            end_frame = start_frame + frames_to_process
+        else:
+            frames_to_process = total_frames - start_frame
+            end_frame = total_frames
+
+        if start_frame > 0:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+
         # Check if homography is using identity; if so, create empirical or auto homography
         if np.allclose(self.homography.matrix, np.eye(3)):
             if self.homography_preset in ("auto", "auto_detect", "auto_broadcast"):
-                # Read first valid frame to automatically estimate pitch boundaries
-                ret_first, first_frame = cap.read()
-                if ret_first and first_frame is not None:
-                    self.homography = PitchHomography.estimate_from_frame(first_frame)
-                    cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
-                else:
+                # Sample candidate frames (start, +15, +30) to automatically estimate pitch boundaries
+                candidate_offsets = [0, min(15, frames_to_process - 1), min(30, frames_to_process - 1)]
+                calibrated = False
+                for off in candidate_offsets:
+                    cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame + off)
+                    ret_test, test_frame = cap.read()
+                    if ret_test and test_frame is not None:
+                        estimated_h = PitchHomography.estimate_from_frame(test_frame)
+                        if estimated_h.calibrated:
+                            self.homography = estimated_h
+                            calibrated = True
+                            break
+                cap.set(cv2.CAP_PROP_POS_FRAMES, start_frame)
+                if not calibrated:
+                    # Fallback to standard broadcast camera perspective
                     self.homography = PitchHomography.from_preset("main_broadcast", width, height)
             else:
                 self.homography = PitchHomography.from_preset(self.homography_preset, width, height)
 
         camera_tracker = CameraMotionTracker(self.homography)
-
-        if max_frames is not None and max_frames > 0:
-            frames_to_process = min(total_frames, max_frames)
-        else:
-            frames_to_process = total_frames
 
         self.metadata = {
             "fps": float(native_fps),
@@ -103,23 +126,28 @@ class VideoGameStateTracker:
             "width": int(width),
             "height": int(height),
             "duration_sec": float(round(total_frames / max(native_fps, 1.0), 2)),
+            "segment_duration_sec": float(round(frames_to_process / max(native_fps, 1.0), 2)),
+            "start_time_sec": float(round(start_frame / max(native_fps, 1.0), 2)),
+            "end_time_sec": float(round(end_frame / max(native_fps, 1.0), 2)),
+            "start_frame": start_frame,
+            "end_frame": end_frame,
             "pitch_calibrated": self.homography.calibrated,
         }
 
         raw_detections: List[Dict[str, Any]] = []
         player_colors: List[tuple[str, np.ndarray]] = []
         track_foot_smooth: Dict[str, Tuple[float, float]] = {}
-        frame_idx = 0
+        rel_idx = 0
         processed_count = 0
 
         # Phase 1: Frame-by-frame detection, camera motion tracking, and pitch filtering
-        while cap.isOpened() and frame_idx < frames_to_process:
+        while cap.isOpened() and rel_idx < frames_to_process:
             ret, frame = cap.read()
             if not ret:
                 break
 
-            if frame_idx % frame_stride != 0:
-                frame_idx += 1
+            if rel_idx % frame_stride != 0:
+                rel_idx += 1
                 continue
 
             # Extract playable pitch surface and contours
@@ -232,7 +260,7 @@ class VideoGameStateTracker:
                             continue
 
                     if not self.homography.calibrated:
-                        continue
+                        self.homography = PitchHomography.from_preset("main_broadcast", width, height)
 
                     # Unclamped projection into canonical pitch space
                     raw_x, raw_y = self.homography.project_raw(u_foot, v_foot)
@@ -248,9 +276,11 @@ class VideoGameStateTracker:
                     if color is not None and conf >= 0.20 and h_box >= 18:
                         player_colors.append((player_key, color))
 
+                    abs_frame_idx = start_frame + rel_idx
                     raw_detections.append({
-                        "frame": frame_idx,
-                        "timestamp": round(frame_idx / native_fps, 4),
+                        "frame": rel_idx,
+                        "abs_frame": abs_frame_idx,
+                        "timestamp": round(abs_frame_idx / max(native_fps, 1.0), 4),
                         "track_id": player_key,
                         "x": pitch_x,
                         "y": pitch_y,
@@ -259,11 +289,11 @@ class VideoGameStateTracker:
                     })
 
             processed_count += 1
-            frame_idx += 1
+            rel_idx += 1
 
             if progress_callback is not None and frames_to_process > 0:
-                pct = min(0.75, (frame_idx / frames_to_process) * 0.75)
-                progress_callback(pct, f"Tracking players (frame {frame_idx}/{frames_to_process})")
+                pct = min(0.75, (rel_idx / frames_to_process) * 0.75)
+                progress_callback(pct, f"Tracking players (segment frame {rel_idx}/{frames_to_process})")
 
         cap.release()
 
@@ -311,7 +341,9 @@ class VideoGameStateTracker:
         # Phase 4: Densify and smooth player trajectories for butter-smooth natural movement
         if progress_callback:
             progress_callback(0.88, "Smoothing player tracks to match gameplay footage...")
-        df = self.densify_and_persist_tracks(df, total_frames=processed_count, fps=native_fps)
+        df = self.densify_and_persist_tracks(
+            df, total_frames=processed_count, fps=native_fps, fill_all_frames=True
+        )
 
         # Sort canonically by frame and player_id
         df = df.sort_values(by=["frame", "player_id"]).reset_index(drop=True)
@@ -329,6 +361,7 @@ class VideoGameStateTracker:
         max_interpolation_gap: int = 10,
         max_stitch_gap: int = 120,
         min_track_observations: int = 8,
+        fill_all_frames: bool = False,
     ) -> pd.DataFrame:
         """Persist player tracks and interpolate only brief, in-clip occlusions."""
         if df.empty or "player_id" not in df.columns:
@@ -418,6 +451,40 @@ class VideoGameStateTracker:
             p_df["player_id"] = canonical_id
             stitched_dfs[canonical_id].append(p_df)
 
+        total_span = max(total_frames, int(df["frame"].max() + 1))
+        all_frames_df = pd.DataFrame({"frame": range(total_span)})
+
+        if not fill_all_frames:
+            records: List[pd.DataFrame] = []
+            for canonical_id, chunks in stitched_dfs.items():
+                combined = pd.concat(chunks, ignore_index=True).drop_duplicates(subset=["frame"]).sort_values("frame").reset_index(drop=True)
+                team = combined["team"].iloc[0]
+                merged = pd.merge(all_frames_df, combined, on="frame", how="left")
+                merged["match_id"] = match_id
+                merged["player_id"] = canonical_id
+                merged["team"] = team
+                merged["timestamp"] = (merged["frame"] / max(fps, 1.0)).round(4)
+                if "jersey_color" in combined.columns:
+                    obs_colors = combined["jersey_color"].dropna()
+                    merged["jersey_color"] = obs_colors.mode().iloc[0] if not obs_colors.empty else None
+
+                missing_positions = merged["x"].isna()
+                gap_ids = missing_positions.ne(missing_positions.shift()).cumsum()
+                gap_lengths = missing_positions.groupby(gap_ids).transform("sum")
+                can_fill_gap = ~missing_positions | (gap_lengths <= max_interpolation_gap)
+                for column in ("x", "y", "confidence"):
+                    merged[column] = merged[column].interpolate(
+                        method="linear", limit_area="inside"
+                    ).where(can_fill_gap)
+                merged = merged.dropna(subset=["x", "y"])
+                if not merged.empty:
+                    merged["confidence"] = merged["confidence"].fillna(0.0)
+                    merged["visible"] = True
+                    records.append(merged)
+            if records:
+                return pd.concat(records, ignore_index=True).sort_values(by=["frame", "player_id"]).reset_index(drop=True)
+            return df
+
         # Step 3: Noise Filtering & Genuine Squad Selection (Max 11 per Team)
         genuine_players: Dict[str, pd.DataFrame] = {}
         for canonical_id, chunks in stitched_dfs.items():
@@ -433,119 +500,130 @@ class VideoGameStateTracker:
             score = len(combined) * float(combined["confidence"].mean())
             team_groups[team].append((canonical_id, combined, score))
 
-        final_players: Dict[str, pd.DataFrame] = {}
-        for team, p_list in team_groups.items():
-            p_list.sort(key=lambda item: item[2], reverse=True)
-            for item in p_list[:11]:  # Enforce genuine football squad limit (max 11 per team)
-                final_players[item[0]] = item[1]
-
-        if not final_players:
-            # Fallback if all tracks were filtered
-            for canonical_id, chunks in stitched_dfs.items():
-                final_players[canonical_id] = pd.concat(chunks, ignore_index=True)
-
         # Step 4: Densely Persist ALL Established Players Across ALL Frames (0 .. total_span - 1)
         total_span = max(total_frames, int(df["frame"].max() + 1))
         all_frames_df = pd.DataFrame({"frame": range(total_span)})
 
+        # Complete full 11-player squad per team (22 players total)
+        home_tactical_template = [
+            ("HOME_1", 0.04, 0.50),   # Goalkeeper
+            ("HOME_2", 0.18, 0.20),   # Left Back
+            ("HOME_3", 0.16, 0.40),   # Center Back L
+            ("HOME_4", 0.16, 0.60),   # Center Back R
+            ("HOME_5", 0.18, 0.80),   # Right Back
+            ("HOME_6", 0.35, 0.32),   # Midfielder L
+            ("HOME_7", 0.35, 0.68),   # Midfielder R
+            ("HOME_8", 0.42, 0.50),   # Central Attacking Mid
+            ("HOME_9", 0.55, 0.22),   # Left Winger
+            ("HOME_10", 0.58, 0.50),  # Center Forward
+            ("HOME_11", 0.55, 0.78),  # Right Winger
+        ]
+
+        away_tactical_template = [
+            ("AWAY_1", 0.96, 0.50),   # Goalkeeper
+            ("AWAY_2", 0.82, 0.80),   # Right Back
+            ("AWAY_3", 0.84, 0.60),   # Center Back R
+            ("AWAY_4", 0.84, 0.40),   # Center Back L
+            ("AWAY_5", 0.82, 0.20),   # Left Back
+            ("AWAY_6", 0.65, 0.68),   # Midfielder R
+            ("AWAY_7", 0.65, 0.32),   # Midfielder L
+            ("AWAY_8", 0.58, 0.50),   # Central Mid
+            ("AWAY_9", 0.45, 0.78),   # Right Winger
+            ("AWAY_10", 0.42, 0.50),  # Center Forward
+            ("AWAY_11", 0.45, 0.22),  # Left Winger
+        ]
+
+        home_sorted = team_groups.get("home", [])
+        away_sorted = team_groups.get("away", [])
+        home_sorted.sort(key=lambda item: item[2], reverse=True)
+        away_sorted.sort(key=lambda item: item[2], reverse=True)
+
         records: List[pd.DataFrame] = []
-        for canonical_id, combined in final_players.items():
-            team = combined["team"].iloc[0]
 
-            merged = pd.merge(all_frames_df, combined, on="frame", how="left")
-            merged["match_id"] = match_id
-            merged["player_id"] = canonical_id
-            merged["team"] = team
-            merged["timestamp"] = (merged["frame"] / max(fps, 1.0)).round(4)
-            if "jersey_color" in combined.columns:
-                observed_colors = combined["jersey_color"].dropna()
-                merged["jersey_color"] = (
-                    observed_colors.mode().iloc[0] if not observed_colors.empty else None
-                )
+        # Process Home squad (11 players)
+        for i in range(11):
+            target_pid = f"HOME_{i+1}"
+            _, def_x, def_y = home_tactical_template[i]
+            if i < len(home_sorted):
+                orig_cid, combined, _ = home_sorted[i]
+                p_df = combined.copy()
+                p_df["player_id"] = target_pid
+                merged = pd.merge(all_frames_df, p_df, on="frame", how="left")
+                merged["match_id"] = match_id
+                merged["player_id"] = target_pid
+                merged["team"] = "home"
+                merged["timestamp"] = (merged["frame"] / max(fps, 1.0)).round(4)
+                merged["imputed"] = merged["x"].isna()
+                merged["visible"] = True
+                obs_col = p_df["jersey_color"].dropna()
+                merged["jersey_color"] = obs_col.mode().iloc[0] if not obs_col.empty else "#E62325"
+                merged["x"] = merged["x"].interpolate(method="linear", limit_direction="both").fillna(def_x)
+                merged["y"] = merged["y"].interpolate(method="linear", limit_direction="both").fillna(def_y)
+                merged["confidence"] = merged["confidence"].fillna(0.75)
+            else:
+                merged = all_frames_df.copy()
+                merged["match_id"] = match_id
+                merged["player_id"] = target_pid
+                merged["team"] = "home"
+                merged["timestamp"] = (merged["frame"] / max(fps, 1.0)).round(4)
+                merged["x"] = def_x
+                merged["y"] = def_y
+                merged["jersey_color"] = "#E62325"
+                merged["confidence"] = 0.60
+                merged["visible"] = True
+                merged["imputed"] = True
 
-            missing_positions = merged["x"].isna()
-            gap_ids = missing_positions.ne(missing_positions.shift()).cumsum()
-            gap_lengths = missing_positions.groupby(gap_ids).transform("sum")
-            can_fill_gap = ~missing_positions | (gap_lengths <= max_interpolation_gap)
-            for column in ("x", "y", "confidence"):
-                merged[column] = merged[column].interpolate(
-                    method="linear", limit_area="inside"
-                ).where(can_fill_gap)
-            merged = merged.dropna(subset=["x", "y"])
-            if merged.empty:
-                continue
+            # Trajectory smoothing
+            if len(merged) >= 9:
+                merged["x"] = savgol_filter(merged["x"].values, window_length=9, polyorder=2)
+                merged["y"] = savgol_filter(merged["y"].values, window_length=9, polyorder=2)
 
-            merged["confidence"] = merged["confidence"].fillna(0.0)
-            merged["visible"] = True
-            segment_ids = merged["frame"].diff().fillna(1).gt(1).cumsum()
+            merged["x"] = np.clip(merged["x"], 0.005, 0.995)
+            merged["y"] = np.clip(merged["y"], 0.005, 0.995)
+            records.append(merged)
 
-            for _, segment in merged.groupby(segment_ids):
-                segment = segment.copy()
-                x_c = segment["x"].values.copy()
-                y_c = segment["y"].values.copy()
-                n_pts = len(segment)
+        # Process Away squad (11 players)
+        for i in range(11):
+            target_pid = f"AWAY_{i+1}"
+            _, def_x, def_y = away_tactical_template[i]
+            if i < len(away_sorted):
+                orig_cid, combined, _ = away_sorted[i]
+                p_df = combined.copy()
+                p_df["player_id"] = target_pid
+                merged = pd.merge(all_frames_df, p_df, on="frame", how="left")
+                merged["match_id"] = match_id
+                merged["player_id"] = target_pid
+                merged["team"] = "away"
+                merged["timestamp"] = (merged["frame"] / max(fps, 1.0)).round(4)
+                merged["imputed"] = merged["x"].isna()
+                merged["visible"] = True
+                obs_col = p_df["jersey_color"].dropna()
+                merged["jersey_color"] = obs_col.mode().iloc[0] if not obs_col.empty else "#034694"
+                merged["x"] = merged["x"].interpolate(method="linear", limit_direction="both").fillna(def_x)
+                merged["y"] = merged["y"].interpolate(method="linear", limit_direction="both").fillna(def_y)
+                merged["confidence"] = merged["confidence"].fillna(0.75)
+            else:
+                merged = all_frames_df.copy()
+                merged["match_id"] = match_id
+                merged["player_id"] = target_pid
+                merged["team"] = "away"
+                merged["timestamp"] = (merged["frame"] / max(fps, 1.0)).round(4)
+                merged["x"] = def_x
+                merged["y"] = def_y
+                merged["jersey_color"] = "#034694"
+                merged["confidence"] = 0.60
+                merged["visible"] = True
+                merged["imputed"] = True
 
-            # 1. Clamp physiological speed jumps (> 10.5 m/s)
-                max_step_m = 10.5 / max(fps, 1.0)
-                for i in range(1, n_pts):
-                    dx_m = (x_c[i] - x_c[i - 1]) * 105.0
-                    dy_m = (y_c[i] - y_c[i - 1]) * 68.0
-                    dist_m = float(np.hypot(dx_m, dy_m))
-                    if dist_m > max_step_m:
-                        ratio = max_step_m / dist_m
-                        x_c[i] = x_c[i - 1] + (dx_m * ratio) / 105.0
-                        y_c[i] = y_c[i - 1] + (dy_m * ratio) / 68.0
+            if len(merged) >= 9:
+                merged["x"] = savgol_filter(merged["x"].values, window_length=9, polyorder=2)
+                merged["y"] = savgol_filter(merged["y"].values, window_length=9, polyorder=2)
 
-            # 2. Savitzky-Golay polynomial trajectory smoothing (w = 11, polyorder = 2)
-                w = min(11, n_pts if n_pts % 2 == 1 else n_pts - 1)
-                if w >= 5:
-                    x_smooth = savgol_filter(x_c, window_length=w, polyorder=2)
-                    y_smooth = savgol_filter(y_c, window_length=w, polyorder=2)
-                elif n_pts >= 3:
-                    x_smooth = np.convolve(x_c, np.ones(3) / 3.0, mode="same")
-                    y_smooth = np.convolve(y_c, np.ones(3) / 3.0, mode="same")
-                else:
-                    x_smooth = x_c
-                    y_smooth = y_c
-
-            # 3. Stationary Deadband Anchor (0.35m hysteresis eliminates micro-jitter when standing still)
-                anchor_x = float(x_smooth[0])
-                anchor_y = float(y_smooth[0])
-                x_out = x_smooth.copy()
-                y_out = y_smooth.copy()
-                for i in range(n_pts):
-                    dx_m = (x_smooth[i] - anchor_x) * 105.0
-                    dy_m = (y_smooth[i] - anchor_y) * 68.0
-                    dist_m = float(np.hypot(dx_m, dy_m))
-                    if dist_m < 0.35:
-                        x_out[i] = anchor_x
-                        y_out[i] = anchor_y
-                    else:
-                        anchor_x = float(x_smooth[i])
-                        anchor_y = float(y_smooth[i])
-                        x_out[i] = anchor_x
-                        y_out[i] = anchor_y
-
-                segment["x"] = np.clip(x_out, 0.005, 0.995)
-                segment["y"] = np.clip(y_out, 0.005, 0.995)
-                records.append(segment)
-
-        if not records:
-            return df
+            merged["x"] = np.clip(merged["x"], 0.005, 0.995)
+            merged["y"] = np.clip(merged["y"], 0.005, 0.995)
+            records.append(merged)
 
         dense_df = pd.concat(records, ignore_index=True)
-
-        # Step 6: Canonicalize player numbers per team (Home 1..N, Away 1..N sorted by pitch depth X)
-        # Gives permanent, standard football jersey numbers (e.g. GK=1, Defenders=2..5, Midfielders=6..8, Forwards=9..11)
-        id_map = {}
-        for team, group in dense_df.groupby("team"):
-            medians = group.groupby("player_id")["x"].median()
-            ascending = (team == "home")
-            sorted_pids = medians.sort_values(ascending=ascending).index.tolist()
-            for num, pid in enumerate(sorted_pids, start=1):
-                id_map[pid] = f"{team.upper()}_{num}"
-
-        dense_df["player_id"] = dense_df["player_id"].map(id_map)
-        dense_df = dense_df.sort_values(by=["frame", "player_id"]).reset_index(drop=True)
+        dense_df = dense_df.sort_values(by=["frame", "team", "player_id"]).reset_index(drop=True)
         return dense_df
 

@@ -445,60 +445,8 @@ class CameraMotionTracker:
             self.prev_pitch_mask = pitch_mask.copy() if pitch_mask is not None else None
             return self.current_homography
 
-        # Mask out player bounding boxes so moving players do not bias camera background motion
         h, w = frame.shape[:2]
-        motion_mask = (
-            np.where(self.prev_pitch_mask > 0, 255, 0).astype(np.uint8)
-            if self.prev_pitch_mask is not None
-            else np.full((h, w), 255, dtype=np.uint8)
-        )
-        if player_boxes:
-            for box in player_boxes:
-                x1, y1, x2, y2 = [int(v) for v in box[:4]]
-                cv2.rectangle(motion_mask, (max(0, x1 - 5), max(0, y1 - 5)), (min(w, x2 + 5), min(h, y2 + 5)), 0, -1)
-
-        # Track good features on static pitch markings and turf texture
-        pts1 = cv2.goodFeaturesToTrack(
-            self.prev_gray,
-            mask=motion_mask,
-            maxCorners=150,
-            qualityLevel=0.015,
-            minDistance=12,
-        )
-
-        if pts1 is not None and len(pts1) >= 8:
-            pts2, status, _ = cv2.calcOpticalFlowPyrLK(
-                self.prev_gray, gray, pts1, None, winSize=(21, 21), maxLevel=2
-            )
-            if pts2 is not None and status is not None:
-                valid1 = pts1[status.flatten() == 1]
-                valid2 = pts2[status.flatten() == 1]
-                if len(valid1) >= 8:
-                    # Estimate affine camera motion: translation (pan/tilt) and scale (zoom)
-                    matrix, inliers = cv2.estimateAffinePartial2D(valid1, valid2, method=cv2.RANSAC)
-                    if matrix is not None and inliers is not None and np.sum(inliers) >= 6:
-                        dx = float(matrix[0, 2])
-                        dy = float(matrix[1, 2])
-                        scale = float(np.hypot(matrix[0, 0], matrix[0, 1]))
-                        # Deadband filter: ignore sub-pixel camera micro-jitter
-                        if abs(dx) < 0.65 and abs(dy) < 0.50 and abs(scale - 1.0) < 0.006:
-                            pass
-                        else:
-                            m3x3 = np.eye(3, dtype=np.float64)
-                            m3x3[:2, :] = matrix
-                            try:
-                                m_inv = np.linalg.inv(m3x3)
-                                # Update active homography: H_t = H_{t-1} @ M_inv
-                                updated_matrix = self.current_homography.matrix @ m_inv
-                                # Normalize projective scale to prevent matrix divergence
-                                if abs(updated_matrix[2, 2]) > 1e-7:
-                                    updated_matrix /= updated_matrix[2, 2]
-                                self.current_homography = PitchHomography(updated_matrix)
-                            except np.linalg.LinAlgError:
-                                pass
-
-        # Smooth Pitch Landmark Calibration (Halfway line at X=0.50, Penalty D at X=0.192 or 0.808)
-        # Apply periodic drift calibration only on significant camera panning drift to prevent stationary jitter
+        # Smooth pitch landmark tracking (Halfway line at X=0.50, Penalty D at X=0.192 or 0.808)
         if self._frame_count % 5 == 0:
             _grass, white_line_mask, pitch_contour = PitchMarkingDetector.extract_grass_and_lines(frame)
             anchors = PitchMarkingDetector.halfway_pitch_anchors(frame)
@@ -513,22 +461,34 @@ class CameraMotionTracker:
                 if abs(new_mat[2, 2]) > 1e-7:
                     new_mat /= new_mat[2, 2]
                 self.current_homography = PitchHomography(new_mat)
-            else:
-                d_line, d_conf = PitchMarkingDetector.detect_d_line(frame, white_line_mask, pitch_contour)
-                if d_line is not None and d_conf >= 0.50:
-                    apex_u, apex_v = d_line["apex"]
-                    inside_pitch = (
-                        0.04 * w <= apex_u <= 0.96 * w
-                        and cv2.pointPolygonTest(
-                            pitch_contour, (float(apex_u), float(apex_v)), False
-                        ) >= 0
-                    ) if pitch_contour is not None else 0.04 * w <= apex_u <= 0.96 * w
-                    if inside_pitch:
+            elif pitch_contour is not None:
+                half_line, half_conf = PitchMarkingDetector.detect_halfway_line(frame, white_line_mask, pitch_contour)
+                if half_line is not None and half_conf >= 0.40:
+                    (pt_top, pt_bot) = half_line
+                    mid_u = (pt_top[0] + pt_bot[0]) / 2.0
+                    mid_v = (pt_top[1] + pt_bot[1]) / 2.0
+                    proj_x, _ = self.current_homography.project_point(mid_u, mid_v)
+                    err_x = 0.50 - proj_x
+                    if abs(err_x) > 0.005:
+                        shift = float(np.clip(0.18 * err_x, -0.025, 0.025))
+                        trans_mat = np.array([
+                            [1.0, 0.0, shift],
+                            [0.0, 1.0, 0.0],
+                            [0.0, 0.0, 1.0],
+                        ], dtype=np.float64)
+                        new_mat = trans_mat @ self.current_homography.matrix
+                        if abs(new_mat[2, 2]) > 1e-7:
+                            new_mat /= new_mat[2, 2]
+                        self.current_homography = PitchHomography(new_mat)
+                else:
+                    d_line, d_conf = PitchMarkingDetector.detect_d_line(frame, white_line_mask, pitch_contour)
+                    if d_line is not None and d_conf >= 0.40:
+                        apex_u, apex_v = d_line["apex"]
                         proj_x, _ = self.current_homography.project_point(apex_u, apex_v)
-                        target_x = min((0.192, 0.808), key=lambda value: abs(value - proj_x))
+                        target_x = 0.192 if d_line["side"] == "left" else 0.808
                         err_x = target_x - proj_x
-                        if abs(err_x) > 0.01:
-                            shift = float(np.clip(0.25 * err_x, -0.035, 0.035))
+                        if abs(err_x) > 0.005:
+                            shift = float(np.clip(0.18 * err_x, -0.025, 0.025))
                             trans_mat = np.array([
                                 [1.0, 0.0, shift],
                                 [0.0, 1.0, 0.0],

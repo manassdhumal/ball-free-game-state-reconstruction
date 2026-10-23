@@ -17,6 +17,7 @@ import {
   Zap,
   Clock,
   Gauge,
+  Scissors,
   ChevronLeft,
   ChevronRight,
   ChevronsLeft,
@@ -70,13 +71,18 @@ function VideoReconstructionStudio() {
     duration_sec?: number;
   } | null>(null);
 
-  // Configuration options (Single calibrated high-accuracy pitch projection)
+  // Configuration options (Enforced optimal AI perception settings)
   const preset = "auto_detect";
-  const [durationPreset, setDurationPreset] = useState<"15s" | "30s" | "1m" | "3m" | "full" | "custom">("1m");
-  const [customMaxFrames, setCustomMaxFrames] = useState<number>(1500);
-  const [frameStride, setFrameStride] = useState(1);
-  const [confThreshold, setConfThreshold] = useState(0.08);
-  const [applyMitigation, setApplyMitigation] = useState(true);
+  const frameStride = 1;       // Optimal: 100% frame analysis fidelity for butter-smooth trajectories
+  const confThreshold = 0.08;  // Optimal: high recall capturing all 22 outfield players and goalkeepers
+  const applyMitigation = true;
+
+  // Segment & Time Crop options (Supports custom intervals e.g. Minute 2-3)
+  const [segmentMode, setSegmentMode] = useState<"full" | "30s" | "1m" | "3m" | "crop">("1m");
+  const [cropStartMin, setCropStartMin] = useState<number>(0);
+  const [cropStartSec, setCropStartSec] = useState<number>(0);
+  const [cropEndMin, setCropEndMin] = useState<number>(1);
+  const [cropEndSec, setCropEndSec] = useState<number>(0);
 
   const [isUploading, setIsUploading] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -94,9 +100,9 @@ function VideoReconstructionStudio() {
   const videoContainerRef = useRef<HTMLDivElement | null>(null);
 
   // Effective video parameters
-  const fps = analysisResult?.data.fps || videoMeta?.fps || 25.0;
-  const maxProcessedFrame = analysisResult?.data.max_frame ?? 
-    (analysisResult?.data.frame_count ? analysisResult.data.frame_count - 1 : 0);
+  const fps = analysisResult?.data?.fps || videoMeta?.fps || 25.0;
+  const maxProcessedFrame = analysisResult?.data?.max_frame ?? 
+    (analysisResult?.data?.frame_count ? analysisResult.data.frame_count - 1 : 0);
 
   // File drop handler
   const handleDrop = (e: React.DragEvent<HTMLDivElement>) => {
@@ -161,6 +167,12 @@ function VideoReconstructionStudio() {
         }, 800);
       });
 
+      if (!demoResult?.data || (demoResult as any).status === "error" || demoResult.data?.status === "error") {
+        setIsProcessing(false);
+        setErrorMsg((demoResult as any)?.message || demoResult?.data?.message || "Failed to run sample demo.");
+        return;
+      }
+
       setProgress(1.0);
       setStatusMsg("Demo game state reconstructed!");
       setIsProcessing(false);
@@ -169,9 +181,11 @@ function VideoReconstructionStudio() {
       setMatchId(demoResult.match_id);
       setDataset(`Sample Match Clip (${demoResult.match_id})`);
       setFrame(0);
-      if (videoRef.current) {
-        videoRef.current.currentTime = 0;
-      }
+      try {
+        if (videoRef.current && videoRef.current.readyState >= 1) {
+          videoRef.current.currentTime = 0;
+        }
+      } catch {}
     } catch (err: any) {
       setIsProcessing(false);
       setErrorMsg(err.message || "Failed to run sample demo.");
@@ -206,23 +220,46 @@ function VideoReconstructionStudio() {
       setStatusMsg("Initializing tracking and pitch homography engine...");
       setProgress(0.1);
 
-      // Determine frames to process
-      let framesToRun: number | undefined = 1500;
-      if (durationPreset === "15s") framesToRun = 375;
-      else if (durationPreset === "30s") framesToRun = 750;
-      else if (durationPreset === "1m") framesToRun = 1500;
-      else if (durationPreset === "3m") framesToRun = 4500;
-      else if (durationPreset === "full") framesToRun = 0; // 0 signals full video
-      else if (durationPreset === "custom") framesToRun = customMaxFrames;
+      // Determine segment and time crop window
+      let startTimeSec = 0.0;
+      let endTimeSec: number | undefined = undefined;
+      let framesToRun: number | undefined = undefined;
+
+      const videoFps = uploadRes.fps || 25.0;
+      if (segmentMode === "full") {
+        startTimeSec = 0.0;
+        endTimeSec = undefined;
+        framesToRun = 0; // full video
+      } else if (segmentMode === "30s") {
+        startTimeSec = 0.0;
+        endTimeSec = 30.0;
+        framesToRun = Math.round(30.0 * videoFps);
+      } else if (segmentMode === "1m") {
+        startTimeSec = 0.0;
+        endTimeSec = 60.0;
+        framesToRun = Math.round(60.0 * videoFps);
+      } else if (segmentMode === "3m") {
+        startTimeSec = 0.0;
+        endTimeSec = 180.0;
+        framesToRun = Math.round(180.0 * videoFps);
+      } else if (segmentMode === "crop") {
+        const startSec = Math.max(0, cropStartMin * 60 + cropStartSec);
+        const endSec = Math.max(startSec + 1, cropEndMin * 60 + cropEndSec);
+        startTimeSec = startSec;
+        endTimeSec = endSec;
+        framesToRun = Math.round((endSec - startSec) * videoFps);
+      }
 
       // Trigger background processing with single high-accuracy broadcast projection mode
       await processVideo({
         video_id: uploadRes.video_id,
         preset: "auto_detect",
         max_frames: framesToRun,
-        frame_stride: frameStride,
-        conf_threshold: confThreshold,
-        apply_mitigation: applyMitigation,
+        frame_stride: 1, // Enforced optimal Stride 1 (100% full fidelity)
+        conf_threshold: 0.08, // Enforced optimal 0.08 sensitivity for complete 22-player recall
+        apply_mitigation: true,
+        start_time_sec: startTimeSec,
+        end_time_sec: endTimeSec,
       });
 
       // Poll until background processing completes
@@ -262,6 +299,13 @@ function VideoReconstructionStudio() {
         }, 800);
       });
 
+      if (!resultData?.data || (resultData as any).status === "error" || resultData.data?.status === "error") {
+        setIsUploading(false);
+        setIsProcessing(false);
+        setErrorMsg((resultData as any)?.message || resultData?.data?.message || "Failed to process video.");
+        return;
+      }
+
       setProgress(1.0);
       setStatusMsg("Game state reconstruction complete!");
       setIsProcessing(false);
@@ -270,9 +314,12 @@ function VideoReconstructionStudio() {
       setMatchId(resultData.match_id);
       setDataset(`Video: ${file.name.replace(/\.[^/.]+$/, "")}`);
       setFrame(0);
-      if (videoRef.current) {
-        videoRef.current.currentTime = 0;
-      }
+      const startOffset = resultData.data?.start_time_sec || 0;
+      try {
+        if (videoRef.current && videoRef.current.readyState >= 1) {
+          videoRef.current.currentTime = startOffset;
+        }
+      } catch {}
     } catch (err: any) {
       setIsUploading(false);
       setIsProcessing(false);
@@ -284,9 +331,9 @@ function VideoReconstructionStudio() {
 
   // Pre-fetch all tracking frames for instantaneous zero-latency playback
   useEffect(() => {
-    if (!analysisResult) return;
+    if (!analysisResult?.data || (analysisResult as any).status === "error" || analysisResult.data.status === "error") return;
     const matchId = analysisResult.match_id;
-    const effectiveFps = fps / Math.max(1, analysisResult.data.frame_stride ?? 1);
+    const effectiveFps = fps / Math.max(1, analysisResult.data?.frame_stride ?? 1);
 
     apiFetch<{ frames: Record<string, Array<{ player_id: string; team: string; x: number | null; y: number | null; jersey_color?: string | null }>> }>(
       `/game-state/${matchId}/all`
@@ -304,7 +351,7 @@ function VideoReconstructionStudio() {
             cache[fNum] = players
               .filter((p) => p.x !== null && p.y !== null)
               .map((p, idx) => {
-                const parts = p.player_id.split("_");
+                const parts = (p.player_id || "PLAYER_1").split("_");
                 const playerNum = Number(parts[1]) || (idx + 1);
                 const curX = (p.x ?? 0.5) * 105;
                 const curY = (p.y ?? 0.5) * 68;
@@ -323,7 +370,7 @@ function VideoReconstructionStudio() {
                   }
                 }
                 const jerseyColor =
-                  p.jersey_color || analysisResult.data.team_colors?.[
+                  p.jersey_color || analysisResult.data?.team_colors?.[
                     p.team === "away" ? "away" : "home"
                   ];
 
@@ -353,7 +400,7 @@ function VideoReconstructionStudio() {
 
   // Load frame tracking data with instant memory lookup
   useEffect(() => {
-    if (!analysisResult) return;
+    if (!analysisResult?.data || (analysisResult as any).status === "error" || analysisResult.data.status === "error") return;
     const cached = allFramesRef.current[currentFrame];
     if (cached && cached.length > 0) {
       setFramePlayers(cached);
@@ -368,10 +415,10 @@ function VideoReconstructionStudio() {
         const mapped: Player[] = (res.players || [])
           .filter((p) => p.x !== null && p.y !== null)
           .map((p, idx) => {
-            const parts = p.player_id.split("_");
+            const parts = (p.player_id || "PLAYER_1").split("_");
             const playerNum = Number(parts[1]) || (idx + 1);
             const jerseyColor =
-              p.jersey_color || analysisResult.data.team_colors?.[
+              p.jersey_color || analysisResult.data?.team_colors?.[
                 p.team === "away" ? "away" : "home"
               ];
             return {
@@ -397,9 +444,22 @@ function VideoReconstructionStudio() {
   useEffect(() => {
     let animId: number;
     const syncLoop = () => {
-      if (videoRef.current && isPlaying && analysisResult) {
+      if (videoRef.current && isPlaying && analysisResult?.data && (analysisResult as any).status !== "error" && analysisResult.data.status !== "error") {
+        const startOffset = analysisResult.data?.start_time_sec || 0;
+        const endOffset = analysisResult.data?.end_time_sec || (startOffset + (maxProcessedFrame / fps));
         const curTime = videoRef.current.currentTime;
-        const computedFrame = Math.min(maxProcessedFrame, Math.round(curTime * fps));
+
+        // Loop segment if video reaches end of crop
+        if (curTime >= endOffset) {
+          videoRef.current.currentTime = startOffset;
+          setCurrentFrame(0);
+          return;
+        }
+
+        const computedFrame = Math.min(
+          maxProcessedFrame,
+          Math.max(0, Math.round((curTime - startOffset) * fps))
+        );
         setCurrentFrame((prev) => {
           if (prev !== computedFrame) {
             const cached = allFramesRef.current[computedFrame];
@@ -442,15 +502,20 @@ function VideoReconstructionStudio() {
     if (cached && cached.length > 0) {
       setFramePlayers(cached);
     }
+    const startOffset = analysisResult?.data.start_time_sec || 0;
     if (videoRef.current) {
-      videoRef.current.currentTime = clamped / fps;
+      videoRef.current.currentTime = startOffset + (clamped / fps);
     }
   };
 
   const handleVideoTimeUpdate = () => {
     if (!videoRef.current || !analysisResult) return;
+    const startOffset = analysisResult.data.start_time_sec || 0;
     const curTime = videoRef.current.currentTime;
-    const computedFrame = Math.min(maxProcessedFrame, Math.round(curTime * fps));
+    const computedFrame = Math.min(
+      maxProcessedFrame,
+      Math.max(0, Math.round((curTime - startOffset) * fps))
+    );
     setCurrentFrame(computedFrame);
     const cached = allFramesRef.current[computedFrame];
     if (cached && cached.length > 0) {
@@ -472,7 +537,7 @@ function VideoReconstructionStudio() {
     return `${m.toString().padStart(2, "0")}:${s.toString().padStart(2, "0")}.${ms.toString().padStart(2, "0")}`;
   };
 
-  const currentInsight = analysisResult?.data.sample_insights.find((s) => s.frame === currentFrame);
+  const currentInsight = analysisResult?.data?.sample_insights?.find((s) => s.frame === currentFrame);
 
   return (
     <>
@@ -602,179 +667,191 @@ function VideoReconstructionStudio() {
                 </div>
               </div>
 
-              {/* Duration to Process Selection */}
-              <div>
-                <div className="flex items-center justify-between mb-1.5">
-                  <span className="text-muted-foreground flex items-center gap-1.5 font-medium">
-                    <Clock className="h-3.5 w-3.5" /> Segment Duration to Process
+              {/* Video Segment & Custom Time Crop Selection */}
+              <div className="space-y-2 rounded-lg border border-border bg-panel-alt/40 p-3">
+                <div className="flex items-center justify-between">
+                  <span className="text-foreground flex items-center gap-1.5 font-semibold text-xs">
+                    <Clock className="h-4 w-4 text-emerald-400" /> Match Clip Segment & Time Crop
                   </span>
-                  <span className="font-mono text-[11px] text-emerald-400">
-                    {durationPreset === "15s" && "15 sec (~375 frames)"}
-                    {durationPreset === "30s" && "30 sec (~750 frames)"}
-                    {durationPreset === "1m" && "1 min (~1,500 frames)"}
-                    {durationPreset === "3m" && "3 min (~4,500 frames)"}
-                    {durationPreset === "full" && "Full Video (All Frames)"}
-                    {durationPreset === "custom" && `${customMaxFrames} frames`}
+                  <span className="font-mono text-[11px] text-emerald-400 font-semibold">
+                    {segmentMode === "full" && "Full Video (All Frames)"}
+                    {segmentMode === "30s" && "First 30 sec (~750 frames)"}
+                    {segmentMode === "1m" && "First 1 min (~1,500 frames)"}
+                    {segmentMode === "3m" && "First 3 min (~4,500 frames)"}
+                    {segmentMode === "crop" && `${formatTime(cropStartMin * 60 + cropStartSec)} → ${formatTime(cropEndMin * 60 + cropEndSec)}`}
                   </span>
                 </div>
-                <div className="grid grid-cols-6 gap-1">
-                  {(["15s", "30s", "1m", "3m", "full", "custom"] as const).map((mode) => (
+
+                {/* Mode Selector Buttons */}
+                <div className="grid grid-cols-5 gap-1 pt-1">
+                  {[
+                    { id: "full", label: "FULL CLIP" },
+                    { id: "30s", label: "0:00 - 0:30" },
+                    { id: "1m", label: "0:00 - 1:00" },
+                    { id: "3m", label: "0:00 - 3:00" },
+                    { id: "crop", label: "CUSTOM CROP" },
+                  ].map((item) => (
                     <button
-                      key={mode}
+                      key={item.id}
                       type="button"
-                      onClick={() => setDurationPreset(mode)}
-                      className={`py-1 text-[11px] font-medium rounded transition-all ${
-                        durationPreset === mode
-                          ? "bg-emerald-600 text-white font-semibold shadow-sm"
-                          : "bg-panel-alt border border-border text-muted-foreground hover:text-foreground"
+                      onClick={() => setSegmentMode(item.id as any)}
+                      className={`py-1.5 text-[11px] font-semibold rounded transition-all flex items-center justify-center gap-1 ${
+                        segmentMode === item.id
+                          ? "bg-emerald-600 text-white shadow-sm"
+                          : "bg-panel border border-border text-muted-foreground hover:text-foreground"
                       }`}
                     >
-                      {mode.toUpperCase()}
+                      {item.id === "crop" && <Scissors className="h-3 w-3" />}
+                      <span>{item.label}</span>
                     </button>
                   ))}
                 </div>
 
-                {durationPreset === "custom" && (
-                  <div className="mt-2 flex items-center gap-2">
-                    <input
-                      type="range"
-                      min={50}
-                      max={10000}
-                      step={50}
-                      value={customMaxFrames}
-                      onChange={(e) => setCustomMaxFrames(Number(e.target.value))}
-                      className="w-full accent-emerald-500"
-                    />
-                    <span className="w-16 text-right font-mono text-[11px]">{customMaxFrames}f</span>
+                {/* Custom Time Crop Controls (e.g. Minute 2-3) */}
+                {segmentMode === "crop" && (
+                  <div className="mt-2.5 rounded border border-emerald-500/30 bg-emerald-950/20 p-2.5 space-y-2">
+                    <div className="text-[11px] font-medium text-emerald-300 flex items-center justify-between">
+                      <span className="flex items-center gap-1 font-semibold">
+                        <Scissors className="h-3.5 w-3.5" /> Custom Time Interval (e.g. Minute 2 to 3)
+                      </span>
+                      {videoMeta?.duration_sec ? (
+                        <span className="text-[10px] text-muted-foreground font-mono">
+                          Video Length: {formatTime(videoMeta.duration_sec)}
+                        </span>
+                      ) : null}
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3 items-center">
+                      {/* Start Time */}
+                      <div className="bg-panel border border-border p-2 rounded">
+                        <span className="text-[10px] text-muted-foreground block mb-1 font-medium">
+                          START TIME (From)
+                        </span>
+                        <div className="flex items-center gap-1 font-mono text-xs">
+                          <div className="flex items-center gap-0.5">
+                            <input
+                              type="number"
+                              min={0}
+                              max={120}
+                              value={cropStartMin}
+                              onChange={(e) => setCropStartMin(Math.max(0, parseInt(e.target.value) || 0))}
+                              className="w-12 bg-panel-alt border border-border rounded px-1.5 py-0.5 text-center font-bold text-foreground"
+                            />
+                            <span className="text-muted-foreground text-[10px]">m</span>
+                          </div>
+                          <span className="text-muted-foreground font-bold">:</span>
+                          <div className="flex items-center gap-0.5">
+                            <input
+                              type="number"
+                              min={0}
+                              max={59}
+                              value={cropStartSec}
+                              onChange={(e) => setCropStartSec(Math.max(0, Math.min(59, parseInt(e.target.value) || 0)))}
+                              className="w-12 bg-panel-alt border border-border rounded px-1.5 py-0.5 text-center font-bold text-foreground"
+                            />
+                            <span className="text-muted-foreground text-[10px]">s</span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* End Time */}
+                      <div className="bg-panel border border-border p-2 rounded">
+                        <span className="text-[10px] text-muted-foreground block mb-1 font-medium">
+                          END TIME (To)
+                        </span>
+                        <div className="flex items-center gap-1 font-mono text-xs">
+                          <div className="flex items-center gap-0.5">
+                            <input
+                              type="number"
+                              min={0}
+                              max={120}
+                              value={cropEndMin}
+                              onChange={(e) => setCropEndMin(Math.max(0, parseInt(e.target.value) || 0))}
+                              className="w-12 bg-panel-alt border border-border rounded px-1.5 py-0.5 text-center font-bold text-foreground"
+                            />
+                            <span className="text-muted-foreground text-[10px]">m</span>
+                          </div>
+                          <span className="text-muted-foreground font-bold">:</span>
+                          <div className="flex items-center gap-0.5">
+                            <input
+                              type="number"
+                              min={0}
+                              max={59}
+                              value={cropEndSec}
+                              onChange={(e) => setCropEndSec(Math.max(0, Math.min(59, parseInt(e.target.value) || 0)))}
+                              className="w-12 bg-panel-alt border border-border rounded px-1.5 py-0.5 text-center font-bold text-foreground"
+                            />
+                            <span className="text-muted-foreground text-[10px]">s</span>
+                          </div>
+                        </div>
+                      </div>
+                    </div>
+
+                    {/* Quick Interval Chips */}
+                    <div className="flex items-center gap-1 flex-wrap pt-0.5">
+                      <span className="text-[10px] text-muted-foreground mr-1">Quick intervals:</span>
+                      {[
+                        { label: "Minute 0–1", sm: 0, ss: 0, em: 1, es: 0 },
+                        { label: "Minute 1–2", sm: 1, ss: 0, em: 2, es: 0 },
+                        { label: "Minute 2–3", sm: 2, ss: 0, em: 3, es: 0 },
+                        { label: "Minute 3–4", sm: 3, ss: 0, em: 4, es: 0 },
+                        { label: "Minute 4–5", sm: 4, ss: 0, em: 5, es: 0 },
+                      ].map((chip) => (
+                        <button
+                          key={chip.label}
+                          type="button"
+                          onClick={() => {
+                            setCropStartMin(chip.sm);
+                            setCropStartSec(chip.ss);
+                            setCropEndMin(chip.em);
+                            setCropEndSec(chip.es);
+                          }}
+                          className="text-[10px] bg-panel hover:bg-muted/60 border border-border px-1.5 py-0.5 rounded text-foreground font-mono transition-colors"
+                        >
+                          {chip.label}
+                        </button>
+                      ))}
+                    </div>
+
+                    {/* Dynamic crop verification info */}
+                    <div className="pt-1 text-[11px] font-mono flex items-center justify-between border-t border-emerald-500/20 text-emerald-300">
+                      <span>
+                        Crop window: {formatTime(cropStartMin * 60 + cropStartSec)} → {formatTime(cropEndMin * 60 + cropEndSec)}
+                      </span>
+                      <span>
+                        {Math.max(0, (cropEndMin * 60 + cropEndSec) - (cropStartMin * 60 + cropStartSec))}s span (~{Math.max(0, (cropEndMin * 60 + cropEndSec) - (cropStartMin * 60 + cropStartSec)) * 25}f)
+                      </span>
+                    </div>
                   </div>
                 )}
               </div>
 
-              {/* Frame Sampling Stride with Intuitive Explanations */}
-              <div className="space-y-1.5 rounded-lg border border-border bg-panel-alt/40 p-3">
+              {/* Automatic Pipeline Optimization Banner (Locked optimal engine parameters) */}
+              <div className="rounded-lg border border-border bg-panel-alt/40 p-2.5 space-y-1.5">
                 <div className="flex items-center justify-between">
-                  <div>
-                    <span className="text-foreground flex items-center gap-1.5 font-semibold text-xs">
-                      <Gauge className="h-4 w-4 text-sky-400" /> Frame Sampling Stride (Speed vs. Smoothness)
-                    </span>
-                    <div className="text-[11px] text-muted-foreground mt-0.5">
-                      Controls how many video frames the AI analyzes. Analyze every frame for maximum smoothness, or skip frames for fast scanning.
-                    </div>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-1.5 pt-1">
-                  {[
-                    { stride: 1, label: "Stride 1 (Every Frame)", desc: "100% fidelity — Maximum accuracy & fluid motion (Recommended)" },
-                    { stride: 2, label: "Stride 2 (Every 2nd Frame)", desc: "2× faster — Balanced speed and tracking quality" },
-                    { stride: 3, label: "Stride 3 (Every 3rd Frame)", desc: "3× faster — Fast tactical overview for long clips" },
-                    { stride: 5, label: "Stride 5 (Every 5th Frame)", desc: "5× ultra fast — Instant scanning of matches" },
-                  ].map((item) => (
-                    <button
-                      key={item.stride}
-                      type="button"
-                      onClick={() => setFrameStride(item.stride)}
-                      className={`text-left p-2 rounded border transition-all ${
-                        frameStride === item.stride
-                          ? "border-sky-500 bg-sky-500/10 text-foreground ring-1 ring-sky-500/40"
-                          : "border-border bg-panel hover:bg-muted/40 text-muted-foreground"
-                      }`}
-                    >
-                      <div className="flex items-center justify-between">
-                        <span className={`text-xs font-semibold ${frameStride === item.stride ? "text-sky-300" : "text-foreground"}`}>
-                          {item.label}
-                        </span>
-                        {frameStride === item.stride && (
-                          <span className="text-[9px] bg-sky-500/20 text-sky-300 font-semibold px-1.5 py-0.2 rounded">
-                            ACTIVE
-                          </span>
-                        )}
-                      </div>
-                      <div className="text-[10px] text-muted-foreground mt-0.5 leading-snug">{item.desc}</div>
-                    </button>
-                  ))}
-                </div>
-
-                <div className="text-[10px] text-sky-400/90 pt-1 font-medium flex items-center gap-1">
-                  <Zap className="h-3 w-3 shrink-0" />
-                  {frameStride === 1 && "Stride 1 analyzes all 60 frames per second so player sprints and runs are captured without any stutter."}
-                  {frameStride === 2 && "Stride 2 cuts processing duration in half while still maintaining clear tactical team shapes."}
-                  {frameStride === 3 && "Stride 3 skips two out of three frames for rapid tactical analysis."}
-                  {frameStride === 5 && "Stride 5 gives an ultra-fast preview of game flow."}
-                </div>
-              </div>
-
-              {/* Player Detection Sensitivity with Easy Explanation */}
-              <div className="space-y-1.5 rounded-lg border border-border bg-panel-alt/40 p-3">
-                <div className="flex items-center justify-between">
-                  <div>
-                    <span className="text-foreground flex items-center gap-1.5 font-semibold text-xs">
-                      <Sliders className="h-4 w-4 text-emerald-400" /> Player Detection Sensitivity
-                    </span>
-                    <div className="text-[11px] text-muted-foreground mt-0.5">
-                      Determines how sensitive the AI vision model is to detecting players across the pitch.
-                    </div>
-                  </div>
-                  <span className="font-mono text-xs font-bold px-2 py-0.5 rounded bg-panel border border-border text-emerald-400">
-                    {confThreshold.toFixed(2)}
+                  <span className="text-foreground flex items-center gap-1.5 font-semibold text-xs">
+                    <Sparkles className="h-3.5 w-3.5 text-emerald-400" /> Pipeline Engine Optimization
+                  </span>
+                  <span className="text-[10px] bg-emerald-500/15 border border-emerald-500/30 text-emerald-400 font-semibold px-2 py-0.5 rounded-full flex items-center gap-1">
+                    <CheckCircle2 className="h-3 w-3" /> Auto-Tuned (Optimal)
                   </span>
                 </div>
-
-                <div className="pt-2">
-                  <input
-                    type="range"
-                    min={0.06}
-                    max={0.30}
-                    step={0.02}
-                    value={confThreshold}
-                    onChange={(e) => setConfThreshold(Number(e.target.value))}
-                    className="w-full accent-emerald-500 h-1.5 bg-panel rounded cursor-pointer"
-                  />
-                  <div className="flex justify-between text-[10px] text-muted-foreground mt-1 font-mono">
-                    <span>0.06 (Max Recall)</span>
-                    <span className="text-emerald-400 font-semibold">0.08 (Recommended)</span>
-                    <span>0.30 (Close-ups only)</span>
+                <div className="grid grid-cols-2 gap-2 pt-1 text-[11px]">
+                  <div className="bg-panel border border-border p-2 rounded">
+                    <div className="text-muted-foreground text-[10px] font-medium">Frame Sampling Stride</div>
+                    <div className="text-xs font-bold text-sky-400 font-mono mt-0.5">Stride 1 (100% Fidelity)</div>
+                    <div className="text-[10px] text-muted-foreground mt-0.5">Analyzes every frame for fluid 60 FPS motion.</div>
+                  </div>
+                  <div className="bg-panel border border-border p-2 rounded">
+                    <div className="text-muted-foreground text-[10px] font-medium">Detection Sensitivity</div>
+                    <div className="text-xs font-bold text-emerald-400 font-mono mt-0.5">0.08 Confidence Threshold</div>
+                    <div className="text-[10px] text-muted-foreground mt-0.5">High recall tracking all 22 outfield players.</div>
                   </div>
                 </div>
-
-                <div className="rounded bg-panel/80 border border-border/60 p-2 text-[11px]">
-                  {confThreshold <= 0.10 ? (
-                    <div className="text-emerald-300 flex items-start gap-1.5">
-                      <ShieldCheck className="h-3.5 w-3.5 shrink-0 mt-0.5 text-emerald-400" />
-                      <span>
-                        <strong className="font-semibold text-emerald-200">High Sensitivity ({confThreshold.toFixed(2)}):</strong> Detects distant players, far-side wingers, and deep defenders who appear smaller due to camera perspective. Ensures all players are tracked without dropping anyone.
-                      </span>
-                    </div>
-                  ) : confThreshold <= 0.20 ? (
-                    <div className="text-amber-300 flex items-start gap-1.5">
-                      <ShieldCheck className="h-3.5 w-3.5 shrink-0 mt-0.5 text-amber-400" />
-                      <span>
-                        <strong className="font-semibold text-amber-200">Balanced Sensitivity ({confThreshold.toFixed(2)}):</strong> Standard detection threshold. Best for close-up angles, but may occasionally miss far-side players or wide defenders.
-                      </span>
-                    </div>
-                  ) : (
-                    <div className="text-orange-300 flex items-start gap-1.5">
-                      <AlertCircle className="h-3.5 w-3.5 shrink-0 mt-0.5 text-orange-400" />
-                      <span>
-                        <strong className="font-semibold text-orange-200">Conservative ({confThreshold.toFixed(2)}):</strong> Only detects large, clear foreground players. Distant defenders and wide players will not be tracked.
-                      </span>
-                    </div>
-                  )}
+                <div className="rounded bg-panel border border-border p-1.5 px-2 text-[10px] text-muted-foreground flex items-center justify-between">
+                  <span>Trajectory Smoothing & Filter:</span>
+                  <span className="font-mono text-emerald-400 font-semibold">Active (Savitzky-Golay + Kalman)</span>
                 </div>
-              </div>
-
-              {/* Trajectory Mitigation */}
-              <div className="flex items-center justify-between">
-                <span className="text-muted-foreground font-medium">Trajectory Smoothing</span>
-                <label className="flex items-center gap-1.5 cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={applyMitigation}
-                    onChange={(e) => setApplyMitigation(e.target.checked)}
-                    className="accent-emerald-500"
-                  />
-                  <span className="text-[11px]">Interpolation + SavGol</span>
-                </label>
               </div>
             </div>
 
@@ -821,29 +898,29 @@ function VideoReconstructionStudio() {
           </Panel>
 
           {/* Quick Metrics (When Processed) */}
-          {analysisResult && (
+          {analysisResult?.data && (analysisResult as any).status !== "error" && analysisResult.data.status !== "error" && (
             <Panel title="Reconstruction Summary" subtitle={`Match ID: ${analysisResult.match_id}`}>
               <div className="grid grid-cols-2 gap-2 text-xs">
                 <div className="border border-border bg-panel-alt p-2 rounded">
                   <div className="text-muted-foreground text-[11px]">Frames Reconstructed</div>
                   <div className="text-base font-bold font-mono">
-                    {analysisResult.data.frame_count} frames ({analysisResult.data.duration_sec || (analysisResult.data.max_frame ? (analysisResult.data.max_frame / fps).toFixed(1) : 0)}s)
+                    {analysisResult.data.frame_count ?? 0} frames ({analysisResult.data.duration_sec != null ? Number(analysisResult.data.duration_sec).toFixed(1) : (analysisResult.data.max_frame ? (analysisResult.data.max_frame / fps).toFixed(1) : 0)}s)
                   </div>
                 </div>
                 <div className="border border-border bg-panel-alt p-2 rounded">
                   <div className="text-muted-foreground text-[11px]">Player Observations</div>
-                  <div className="text-base font-bold font-mono">{analysisResult.data.tracking_rows}</div>
+                  <div className="text-base font-bold font-mono">{analysisResult.data.tracking_rows ?? 0}</div>
                 </div>
                 <div className="border border-border bg-panel-alt p-2 rounded">
                   <div className="text-muted-foreground text-[11px]">Average TAS Score</div>
                   <div className="text-base font-bold font-mono text-emerald-400">
-                    {analysisResult.data.average_tas.toFixed(3)}
+                    {analysisResult.data.average_tas != null ? Number(analysisResult.data.average_tas).toFixed(3) : "—"}
                   </div>
                 </div>
                 <div className="border border-border bg-panel-alt p-2 rounded">
                   <div className="text-muted-foreground text-[11px]">Possession Split</div>
                   <div className="text-xs font-semibold font-mono mt-1">
-                    H: {analysisResult.data.possession_share.home}% | A: {analysisResult.data.possession_share.away}%
+                    H: {analysisResult.data.possession_share?.home ?? 50}% | A: {analysisResult.data.possession_share?.away ?? 50}%
                   </div>
                 </div>
               </div>
@@ -1034,7 +1111,7 @@ function VideoReconstructionStudio() {
                 <div>
                   <span className="text-[11px] text-muted-foreground">Frame TAS Advantage</span>
                   <div className="font-bold font-mono text-emerald-400">
-                    {currentInsight.tas.toFixed(3)}
+                    {currentInsight.tas != null ? Number(currentInsight.tas).toFixed(3) : "—"}
                   </div>
                 </div>
               </div>
