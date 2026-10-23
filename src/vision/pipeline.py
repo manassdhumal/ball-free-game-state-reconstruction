@@ -74,10 +74,15 @@ class VideoAnalysisPipeline:
         )
 
         if tracking_df.empty:
+            message = (
+                "No reliable full-pitch calibration was found. The video needs a visible halfway line and center-circle landmarks, or explicit pitch-corner calibration."
+                if not getattr(tracker, "metadata", {}).get("pitch_calibrated", False)
+                else "No players detected in video."
+            )
             return {
                 "match_id": match_id,
                 "status": "error",
-                "message": "No players detected in video.",
+                "message": message,
                 "frame_count": 0,
             }
 

@@ -288,7 +288,7 @@ function VideoReconstructionStudio() {
     const matchId = analysisResult.match_id;
     const effectiveFps = fps / Math.max(1, analysisResult.data.frame_stride ?? 1);
 
-    apiFetch<{ frames: Record<string, Array<{ player_id: string; team: string; x: number | null; y: number | null }>> }>(
+    apiFetch<{ frames: Record<string, Array<{ player_id: string; team: string; x: number | null; y: number | null; jersey_color?: string | null }>> }>(
       `/game-state/${matchId}/all`
     )
       .then((res) => {
@@ -322,17 +322,15 @@ function VideoReconstructionStudio() {
                     vy = (dy / dist) * vectorLen;
                   }
                 }
+                const jerseyColor =
+                  p.jersey_color || analysisResult.data.team_colors?.[
+                    p.team === "away" ? "away" : "home"
+                  ];
 
                 return {
                   id: p.player_id,
                   team: (p.team === "home" || p.team === "away" ? p.team : "home") as "home" | "away",
-                  ...(analysisResult.data.team_colors?.[
-                    p.team === "away" ? "away" : "home"
-                  ] && {
-                    jerseyColor: analysisResult.data.team_colors[
-                      p.team === "away" ? "away" : "home"
-                    ],
-                  }),
+                  ...(jerseyColor ? { jerseyColor } : {}),
                   number: playerNum,
                   name: p.player_id,
                   role: "Field",
@@ -363,7 +361,7 @@ function VideoReconstructionStudio() {
     }
 
     const matchId = analysisResult.match_id;
-    apiFetch<{ players: Array<{ player_id: string; team: string; x: number | null; y: number | null }> }>(
+    apiFetch<{ players: Array<{ player_id: string; team: string; x: number | null; y: number | null; jersey_color?: string | null }> }>(
       `/game-state/${matchId}/${currentFrame}`
     )
       .then((res) => {
@@ -372,16 +370,14 @@ function VideoReconstructionStudio() {
           .map((p, idx) => {
             const parts = p.player_id.split("_");
             const playerNum = Number(parts[1]) || (idx + 1);
+            const jerseyColor =
+              p.jersey_color || analysisResult.data.team_colors?.[
+                p.team === "away" ? "away" : "home"
+              ];
             return {
               id: p.player_id,
               team: (p.team === "home" || p.team === "away" ? p.team : "home") as "home" | "away",
-              ...(analysisResult.data.team_colors?.[
-                p.team === "away" ? "away" : "home"
-              ] && {
-                jerseyColor: analysisResult.data.team_colors[
-                  p.team === "away" ? "away" : "home"
-                ],
-              }),
+              ...(jerseyColor ? { jerseyColor } : {}),
               number: playerNum,
               name: p.player_id,
               role: "Field",

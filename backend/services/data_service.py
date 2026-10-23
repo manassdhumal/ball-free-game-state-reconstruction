@@ -124,6 +124,7 @@ def frame(match_id: str, frame_number: int) -> dict[str, Any]:
             pid = f"{str(row.team).upper()}_{pid}"
         conf = getattr(row, "confidence", 1.0)
         conf_val = 1.0 if pd.isna(conf) else float(conf)
+        jersey_color = getattr(row, "jersey_color", None)
         players.append({
             "player_id": pid,
             "team": row.team,
@@ -131,6 +132,7 @@ def frame(match_id: str, frame_number: int) -> dict[str, Any]:
             "y": None if pd.isna(row.y) else float(row.y),
             "confidence": conf_val,
             "visible": bool(getattr(row, "visible", True)),
+            "jersey_color": None if pd.isna(jersey_color) else str(jersey_color),
         })
     timestamp = float(rows["timestamp"].iloc[0])
     return {"match_id": match_id, "frame": frame_number, "timestamp": timestamp,

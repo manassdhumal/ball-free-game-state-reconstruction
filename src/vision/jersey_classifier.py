@@ -13,6 +13,7 @@ class JerseyClassifier:
     def __init__(self, team_names: Tuple[str, str] = ("home", "away")) -> None:
         self.team_names = team_names
         self.team_colors: Dict[str, np.ndarray] = {}  # RGB centers
+        self.player_colors: Dict[str, np.ndarray] = {}
         self._team_lab_centers: Dict[str, np.ndarray] = {}
         self._fitted = False
         self._player_team_cache: Dict[str, str] = {}
@@ -37,10 +38,9 @@ class JerseyClassifier:
         if w < 2 or h < 4:
             return None
 
-        # Torso chest region: vertically 18% to 48% (avoids head, neck, hair, and shorts)
-        # Horizontally inner 25% to 75% (avoids arms, sleeves, and pitch background bleed)
+        # Use the central chest; red kit fabric overlaps common HSV skin ranges.
         torso_y1 = y1 + int(0.18 * h)
-        torso_y2 = max(torso_y1 + 1, y1 + int(0.48 * h))
+        torso_y2 = max(torso_y1 + 1, y1 + int(0.46 * h))
         torso_x1 = x1 + int(0.25 * w)
         torso_x2 = max(torso_x1 + 1, x1 + int(0.75 * w))
 
@@ -55,27 +55,27 @@ class JerseyClassifier:
         # 1. Reject green grass
         grass_mask = (hsv[:, :, 0] >= 28) & (hsv[:, :, 0] <= 92) & (hsv[:, :, 1] >= 25)
 
-        # 2. Reject human skin tones (face, neck, arms)
-        skin_mask = (
-            (hsv[:, :, 0] >= 0) & (hsv[:, :, 0] <= 24) &
-            (hsv[:, :, 1] >= 28) & (hsv[:, :, 1] <= 175) &
-            (hsv[:, :, 2] >= 50)
-        )
-
-        # 3. Reject pitch shadows and extreme specular glare
+        # Reject pitch shadows and extreme specular glare.
         shadow_mask = (hsv[:, :, 2] < 25)
         glare_mask = (hsv[:, :, 2] > 252) & (hsv[:, :, 1] < 15)
 
-        invalid_mask = grass_mask | skin_mask | shadow_mask | glare_mask
-        fabric_pixels = crop[~invalid_mask]
+        invalid_mask = grass_mask | shadow_mask | glare_mask
+        fabric_mask = ~invalid_mask
+        fabric_pixels = crop[fabric_mask]
 
         if len(fabric_pixels) < 5:
             # Fallback 1: non-grass pixels
-            fabric_pixels = crop[~grass_mask]
+            fabric_mask = ~grass_mask
+            fabric_pixels = crop[fabric_mask]
 
         if len(fabric_pixels) < 5:
             # Fallback 2: all pixels in crop
-            fabric_pixels = crop.reshape(-1, 3)
+            fabric_mask = np.ones(hsv.shape[:2], dtype=bool)
+            fabric_pixels = crop[fabric_mask]
+
+        chromatic_pixels = crop[fabric_mask & (hsv[:, :, 1] >= 45)]
+        if len(chromatic_pixels) >= max(5, int(0.06 * len(fabric_pixels))):
+            fabric_pixels = chromatic_pixels
 
         # Convert valid pixels to RGB
         rgb_pixels = fabric_pixels[:, ::-1].astype(np.float32)
@@ -108,7 +108,14 @@ class JerseyClassifier:
         """
         self._referee_ids.clear()
         self._player_team_cache.clear()
-        if len(player_color_samples) < 2:
+        self.player_colors.clear()
+
+        player_samples_map = defaultdict(list)
+        for p_id, col in player_color_samples:
+            if col is not None and not np.any(np.isnan(col)):
+                player_samples_map[p_id].append(col)
+
+        if not player_samples_map:
             self.team_colors[self.team_names[0]] = np.array([200.0, 50.0, 50.0])  # Red
             self.team_colors[self.team_names[1]] = np.array([50.0, 50.0, 200.0])  # Blue
             self._team_lab_centers[self.team_names[0]] = self._rgb_to_lab(self.team_colors[self.team_names[0]])
@@ -116,18 +123,10 @@ class JerseyClassifier:
             self._fitted = True
             return
 
-        # Group colors by player track to get robust per-player median colors
-        player_samples_map = defaultdict(list)
-        for p_id, col in player_color_samples:
-            if col is not None and not np.any(np.isnan(col)):
-                player_samples_map[p_id].append(col)
-
-        if not player_samples_map:
-            return
-
         unique_players = sorted(player_samples_map)
         if len(unique_players) < 2:
             single_rgb = np.median(player_samples_map[unique_players[0]], axis=0)
+            self.player_colors[unique_players[0]] = single_rgb
             self.team_colors[self.team_names[0]] = single_rgb
             contrasting = np.array([255 - single_rgb[0], 255 - single_rgb[1], 255 - single_rgb[2]])
             self.team_colors[self.team_names[1]] = contrasting
@@ -143,6 +142,7 @@ class JerseyClassifier:
         for p_id in unique_players:
             rgbs = np.array(player_samples_map[p_id], dtype=np.float32)
             med_rgb = np.median(rgbs, axis=0)
+            self.player_colors[p_id] = med_rgb
             player_median_rgbs.append(med_rgb)
             player_median_labs.append(self._rgb_to_lab(med_rgb))
 
@@ -150,17 +150,27 @@ class JerseyClassifier:
         player_rgbs = np.array(player_median_rgbs, dtype=np.float32)
 
         criteria = (cv2.TERM_CRITERIA_EPS + cv2.TERM_CRITERIA_MAX_ITER, 30, 0.5)
+        player_hsv = cv2.cvtColor(
+            np.clip(player_rgbs, 0, 255).astype(np.uint8).reshape(-1, 1, 3),
+            cv2.COLOR_RGB2HSV,
+        ).reshape(-1, 3)
+        # Bright, nearly white fabric is often a shirt accent or lighting, not a third team.
+        team_sample_indices = np.flatnonzero(
+            (player_hsv[:, 1] >= 28) | (player_hsv[:, 2] < 145)
+        )
+        if len(team_sample_indices) < 2:
+            team_sample_indices = np.arange(len(unique_players))
 
-        # Cluster into 3 if we have >= 5 players to isolate referee/goalkeeper outliers
-        k_clusters = 3 if len(unique_players) >= 5 else 2
-        k_clusters = min(k_clusters, len(unique_players))
+        team_labs = player_labs[team_sample_indices]
+        team_rgbs = player_rgbs[team_sample_indices]
+        k_clusters = min(2, len(team_sample_indices))
         cv2.setRNGSeed(0)
         _, labels, centers = cv2.kmeans(
-            player_labs, k_clusters, None, criteria, 10, cv2.KMEANS_PP_CENTERS
+            team_labs, k_clusters, None, criteria, 10, cv2.KMEANS_PP_CENTERS
         )
         labels = labels.flatten()
 
-        # Count players in each cluster to identify the two dominant outfield teams
+        # Cluster only the two outfield kits; bright neutral accents must not form a team.
         cluster_counts = Counter(labels)
         sorted_clusters = [c_idx for c_idx, _ in cluster_counts.most_common(2)]
 
@@ -168,11 +178,11 @@ class JerseyClassifier:
         c1_idx = sorted_clusters[1] if len(sorted_clusters) > 1 else (1 if c0_idx == 0 else 0)
 
         # Average the RGB colors of players belonging to each team cluster
-        c0_players_mask = (labels == c0_idx)
-        c1_players_mask = (labels == c1_idx)
+        c0_players_mask = labels == c0_idx
+        c1_players_mask = labels == c1_idx
 
-        c0_rgb = np.median(player_rgbs[c0_players_mask], axis=0) if np.any(c0_players_mask) else player_rgbs[0]
-        c1_rgb = np.median(player_rgbs[c1_players_mask], axis=0) if np.any(c1_players_mask) else player_rgbs[-1]
+        c0_rgb = np.median(team_rgbs[c0_players_mask], axis=0) if np.any(c0_players_mask) else team_rgbs[0]
+        c1_rgb = np.median(team_rgbs[c1_players_mask], axis=0) if np.any(c1_players_mask) else team_rgbs[-1]
 
         if tuple(c1_rgb.tolist()) < tuple(c0_rgb.tolist()):
             c0_rgb, c1_rgb = c1_rgb, c0_rgb
@@ -256,4 +266,12 @@ class JerseyClassifier:
             r, g, b = [int(np.clip(c, 0, 255)) for c in rgb[:3]]
             hex_colors[team_name] = f"#{r:02x}{g:02x}{b:02x}"
         return hex_colors
+
+    def get_player_hex_color(self, player_id: str) -> str | None:
+        """Return the robust observed torso color for one track as a CSS hex value."""
+        rgb = self.player_colors.get(str(player_id))
+        if rgb is None:
+            return None
+        r, g, b = [int(np.clip(c, 0, 255)) for c in rgb[:3]]
+        return f"#{r:02x}{g:02x}{b:02x}"
 

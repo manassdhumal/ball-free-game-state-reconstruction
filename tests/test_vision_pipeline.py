@@ -64,6 +64,13 @@ class TestPitchHomography(unittest.TestCase):
         self.assertIsNone(px_out)
         self.assertIsNone(py_out)
 
+    def test_auto_estimate_does_not_calibrate_from_grass_contour(self):
+        frame = np.full((120, 160, 3), [45, 150, 45], dtype=np.uint8)
+
+        homography = PitchHomography.estimate_from_frame(frame)
+
+        self.assertFalse(homography.calibrated)
+
 
 class TestPitchMarkingDetector(unittest.TestCase):
     """Test pitch segmentation and geometry detection."""
@@ -105,6 +112,21 @@ class TestPitchMarkingDetector(unittest.TestCase):
         mid_x = (pt_top[0] + pt_bot[0]) / 2.0
         self.assertAlmostEqual(mid_x, 160.0, delta=10.0)
 
+    def test_halfway_and_circle_calibrate_known_pitch_points(self):
+        frame = np.full((240, 320, 3), [40, 160, 40], dtype=np.uint8)
+        cv2.line(frame, (200, 2), (200, 238), (255, 255, 255), 3)
+        cv2.circle(frame, (200, 120), 35, (255, 255, 255), 2)
+
+        anchors = PitchMarkingDetector.halfway_pitch_anchors(frame)
+
+        self.assertIsNotNone(anchors)
+        source, target = anchors
+        homography = PitchHomography.from_four_points(source, target)
+        for point, expected in zip(source, target):
+            actual = homography.project_point(*point)
+            self.assertAlmostEqual(actual[0], expected[0], places=3)
+            self.assertAlmostEqual(actual[1], expected[1], places=3)
+
     def test_detect_d_line_curvature(self):
         # Green frame with a penalty D arc
         h, w = 240, 320
@@ -119,6 +141,10 @@ class TestPitchMarkingDetector(unittest.TestCase):
         self.assertEqual(d_res["side"], "left")
         self.assertGreater(conf, 0.30)
 
+        source, destination = PitchMarkingDetector.detect_pitch_geometry(frame)
+        self.assertIsNone(source)
+        self.assertIsNone(destination)
+
 
 class TestCameraMotionTracker(unittest.TestCase):
     """Test inter-frame homography motion tracking."""
@@ -130,6 +156,39 @@ class TestCameraMotionTracker(unittest.TestCase):
         h_out = tracker.update(frame1)
         self.assertIsNotNone(h_out)
         np.testing.assert_array_almost_equal(h_out.matrix, h0.matrix)
+
+    def test_halfway_landmark_corrects_longitudinal_drift(self):
+        frame = np.full((240, 320, 3), [40, 160, 40], dtype=np.uint8)
+        cv2.line(frame, (200, 2), (200, 238), (255, 255, 255), 3)
+        cv2.circle(frame, (200, 120), 35, (255, 255, 255), 2)
+        homography = PitchHomography.from_preset("normalized", 320, 240)
+        tracker = CameraMotionTracker(homography)
+        before_x, _ = homography.project_point(200, 120)
+        _, before_top_y = homography.project_point(200, 2)
+        _, before_bottom_y = homography.project_point(200, 238)
+
+        for _ in range(5):
+            corrected = tracker.update(frame)
+
+        after_x, _ = corrected.project_point(200, 120)
+        _, after_top_y = corrected.project_point(200, 2)
+        _, after_bottom_y = corrected.project_point(200, 238)
+        self.assertGreater(before_x, 0.5)
+        self.assertLess(after_x, before_x)
+        self.assertAlmostEqual(after_x, 0.59375, places=2)
+        self.assertGreater(after_top_y, before_top_y)
+        self.assertLess(after_bottom_y, before_bottom_y)
+
+    def test_uncalibrated_tracker_acquires_later_full_pitch_view(self):
+        frame = np.full((240, 320, 3), [40, 160, 40], dtype=np.uint8)
+        cv2.line(frame, (200, 2), (200, 238), (255, 255, 255), 3)
+        cv2.circle(frame, (200, 120), 35, (255, 255, 255), 2)
+        tracker = CameraMotionTracker(PitchHomography(calibrated=False))
+
+        for _ in range(5):
+            homography = tracker.update(frame)
+
+        self.assertTrue(homography.calibrated)
 
 
 class TestJerseyClassifier(unittest.TestCase):
@@ -148,6 +207,18 @@ class TestJerseyClassifier(unittest.TestCase):
         # In RGB, red should dominate
         self.assertGreater(color[0], 200)  # Red channel
         self.assertLess(color[2], 50)    # Blue channel
+
+    def test_red_kit_is_not_discarded_as_skin_or_white_shorts(self):
+        classifier = JerseyClassifier()
+        frame = np.full((100, 100, 3), [40, 180, 40], dtype=np.uint8)
+        frame[20:50, 40:60] = [90, 120, 190]
+        frame[50:80, 40:60] = [240, 240, 240]
+
+        color = classifier.extract_torso_color(frame, [40, 20, 60, 80])
+
+        self.assertIsNotNone(color)
+        self.assertGreater(color[0], color[1])
+        self.assertGreater(color[1], color[2])
 
     def test_team_clustering(self):
         classifier = JerseyClassifier()
@@ -218,6 +289,42 @@ class TestJerseyClassifier(unittest.TestCase):
 
         self.assertEqual(first.get_team_hex_colors(), second.get_team_hex_colors())
 
+    def test_classifier_retains_observed_color_per_track(self):
+        classifier = JerseyClassifier()
+        classifier.fit_teams([
+            ("RED_1", np.array([210.0, 60.0, 70.0])),
+            ("RED_1", np.array([220.0, 50.0, 60.0])),
+            ("BLUE_1", np.array([40.0, 70.0, 190.0])),
+            ("BLUE_1", np.array([30.0, 60.0, 210.0])),
+        ])
+
+        self.assertEqual(classifier.get_player_hex_color("RED_1"), "#d73741")
+        self.assertEqual(classifier.get_player_hex_color("missing"), None)
+
+    def test_bright_neutral_kit_accents_do_not_become_a_third_team(self):
+        classifier = JerseyClassifier()
+        samples = []
+        for index, color in enumerate([
+            [205, 80, 90], [195, 100, 105], [210, 125, 130],
+            [200, 90, 100], [185, 110, 115],
+        ]):
+            samples.append((f"RED_{index}", np.array(color, dtype=float)))
+        for index, color in enumerate([
+            [188, 194, 192], [194, 198, 196], [185, 190, 188],
+            [192, 195, 191], [189, 193, 190],
+        ]):
+            samples.append((f"WHITE_ACCENT_{index}", np.array(color, dtype=float)))
+        for index, color in enumerate([
+            [55, 60, 68], [68, 72, 80], [80, 82, 88],
+        ]):
+            samples.append((f"DARK_{index}", np.array(color, dtype=float)))
+
+        classifier.fit_teams(samples)
+        centers = list(classifier.team_colors.values())
+
+        self.assertTrue(any(center[0] > center[1] + 35 for center in centers))
+        self.assertTrue(any(float(np.mean(center)) < 120 for center in centers))
+
     def test_missing_color_uses_deterministic_team_fallback(self):
         first = JerseyClassifier()
         second = JerseyClassifier()
@@ -238,6 +345,7 @@ class TestTrackPersistence(unittest.TestCase):
                 "team": "home",
                 "x": 0.2 + frame * 0.001,
                 "y": 0.5,
+                "jersey_color": "#d73741",
                 "confidence": 0.9,
                 "visible": True,
             })
@@ -249,6 +357,7 @@ class TestTrackPersistence(unittest.TestCase):
         self.assertEqual(int(result["frame"].min()), 5)
         self.assertEqual(int(result["frame"].max()), 23)
         self.assertFalse(result["frame"].between(10, 19).any())
+        self.assertEqual(result["jersey_color"].dropna().unique().tolist(), ["#d73741"])
 
 
 if __name__ == "__main__":

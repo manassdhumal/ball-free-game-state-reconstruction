@@ -103,6 +103,7 @@ class VideoGameStateTracker:
             "width": int(width),
             "height": int(height),
             "duration_sec": float(round(total_frames / max(native_fps, 1.0), 2)),
+            "pitch_calibrated": self.homography.calibrated,
         }
 
         raw_detections: List[Dict[str, Any]] = []
@@ -125,8 +126,8 @@ class VideoGameStateTracker:
             grass_mask, _white_lines, pitch_contour = PitchMarkingDetector.extract_grass_and_lines(frame)
             has_grass = bool(np.mean(grass_mask > 0) > 0.08)
 
-            # Native model resolution (640) guarantees accurate feature maps without bilinear blurring artifacts
-            inference_imgsz = 640
+            # Preserve distant-player detail in HD footage without changing detector confidence.
+            inference_imgsz = 960 if max(width, height) >= 720 else 640
             # Set tuned confidence threshold for person tracking (high recall for all outfield players)
             active_conf = max(0.06, min(self.conf_threshold, 0.15))
 
@@ -159,7 +160,14 @@ class VideoGameStateTracker:
                     detected_boxes_xyxy.append(b.xyxy[0].cpu().numpy().tolist())
 
             # Update camera homography dynamically to track camera pan/tilt/zoom across frames
-            self.homography = camera_tracker.update(frame, detected_boxes_xyxy)
+            pitch_motion_mask = grass_mask
+            if pitch_contour is not None:
+                pitch_motion_mask = np.zeros_like(grass_mask)
+                cv2.drawContours(pitch_motion_mask, [pitch_contour], -1, 255, -1)
+            self.homography = camera_tracker.update(
+                frame, detected_boxes_xyxy, pitch_motion_mask
+            )
+            self.metadata["pitch_calibrated"] = self.homography.calibrated
 
             if results and len(results) > 0 and results[0].boxes is not None:
                 boxes = results[0].boxes
@@ -223,6 +231,9 @@ class VideoGameStateTracker:
                         if grass_mask[v_idx, u_idx] == 0:
                             continue
 
+                    if not self.homography.calibrated:
+                        continue
+
                     # Unclamped projection into canonical pitch space
                     raw_x, raw_y = self.homography.project_raw(u_foot, v_foot)
                     # If outside pitch sidelines or goal lines, DROP (linesmen, sidelines, coaches!)
@@ -234,7 +245,7 @@ class VideoGameStateTracker:
 
                     # Extract torso color for team clustering
                     color = self.classifier.extract_torso_color(frame, xyxy)
-                    if color is not None:
+                    if color is not None and conf >= 0.20 and h_box >= 18:
                         player_colors.append((player_key, color))
 
                     raw_detections.append({
@@ -290,6 +301,7 @@ class VideoGameStateTracker:
                 "team": team,
                 "x": det["x"],
                 "y": det["y"],
+                "jersey_color": self.classifier.get_player_hex_color(track_id),
                 "confidence": det["confidence"],
                 "visible": True,
             })
@@ -445,6 +457,11 @@ class VideoGameStateTracker:
             merged["player_id"] = canonical_id
             merged["team"] = team
             merged["timestamp"] = (merged["frame"] / max(fps, 1.0)).round(4)
+            if "jersey_color" in combined.columns:
+                observed_colors = combined["jersey_color"].dropna()
+                merged["jersey_color"] = (
+                    observed_colors.mode().iloc[0] if not observed_colors.empty else None
+                )
 
             missing_positions = merged["x"].isna()
             gap_ids = missing_positions.ne(missing_positions.shift()).cumsum()

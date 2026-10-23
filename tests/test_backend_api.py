@@ -1,8 +1,12 @@
 import unittest
+from unittest.mock import patch
+
+import pandas as pd
 
 from fastapi.testclient import TestClient
 
 from backend.app import app
+from backend.services import data_service
 
 
 class BackendApiTests(unittest.TestCase):
@@ -21,6 +25,23 @@ class BackendApiTests(unittest.TestCase):
         self.assertEqual(response.status_code, 200)
         self.assertEqual(len(response.json()["players"]), 28)
         self.assertEqual(self.client.get("/api/players/metrica_game1").status_code, 200)
+
+    def test_game_state_includes_observed_jersey_color(self):
+        frame = pd.DataFrame([{
+            "frame": 7,
+            "timestamp": 0.28,
+            "player_id": "HOME_1",
+            "team": "home",
+            "x": 0.4,
+            "y": 0.6,
+            "jersey_color": "#d73741",
+            "confidence": 0.9,
+            "visible": True,
+        }])
+        with patch("backend.services.data_service.tracking", return_value=frame):
+            result = data_service.frame("uploaded_test", 7)
+
+        self.assertEqual(result["players"][0]["jersey_color"], "#d73741")
 
     def test_feature_endpoints(self):
         for path in (

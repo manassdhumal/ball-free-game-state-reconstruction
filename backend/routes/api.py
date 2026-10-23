@@ -48,6 +48,7 @@ def game_state_all(match_id: str):
             if not pid.startswith(f"{str(row.team).upper()}_"):
                 pid = f"{str(row.team).upper()}_{pid}"
             conf = getattr(row, "confidence", 1.0)
+            jersey_color = getattr(row, "jersey_color", None)
             frames_dict[f].append({
                 "player_id": pid,
                 "team": row.team,
@@ -55,6 +56,7 @@ def game_state_all(match_id: str):
                 "y": None if pd.isna(row.y) else float(row.y),
                 "confidence": 1.0 if pd.isna(conf) else float(conf),
                 "visible": bool(getattr(row, "visible", True)),
+                "jersey_color": None if pd.isna(jersey_color) else str(jersey_color),
             })
         return {"match_id": match_id, "frames": frames_dict}
     except (KeyError, FileNotFoundError) as exc:
